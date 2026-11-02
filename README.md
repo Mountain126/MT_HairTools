@@ -1,4 +1,4 @@
-SnapCurveHair installation
+MT_HairTools installation
 
 1. Copy MT_HairTools folder to {Path to Documents}\Documents\Maya\{Maya Version}\scripts\
 

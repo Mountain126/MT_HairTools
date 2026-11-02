@@ -1,0 +1,11 @@
+# Bỏ qua thư mục bộ nhớ đệm của Python hoặc Godot
+__pycache__/
+.godot/
+.pyc
+
+# Bỏ qua tất cả các file có đuôi .log hoặc .tmp
+*.log
+*.tmp
+
+# Bỏ qua file chứa mật khẩu, token cấu hình
+.env

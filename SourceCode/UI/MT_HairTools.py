@@ -110,7 +110,7 @@ def show_ui():
     # ----------------------------------------
     # 2. Nhóm Flip Curves
     # ----------------------------------------
-    flip_frame = cmds.frameLayout(label=" 2. Flip Curves ", collapsable=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
+    flip_frame = cmds.frameLayout(label=" 2. Flip Curves Keep Form", collapsable=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
     cmds.columnLayout(adjustableColumn=True, parent=flip_frame, rowSpacing=6)
     cmds.text(
         label="Chọn Curve, bật các trục cần lật rồi nhấn Flip Keep Form.",
@@ -130,7 +130,7 @@ def show_ui():
         axes = [axis for axis in ("X", "Y", "Z") if flip_axes[axis]]
         logic.flip_keep_form(axes)
 
-    cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 106), (2, 106), (3, 106)], columnSpacing=[(2, 6), (3, 6)])
+    cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 109), (2, 109), (3, 109)], columnSpacing=[(2, 6), (3, 6)])
     for axis in ("X", "Y", "Z"):
         flip_axis_buttons[axis] = cmds.button(
             label=axis,
@@ -145,6 +145,7 @@ def show_ui():
         bgc=color01(238, 137, 38),
         command=run_flip_keep_form
     )
+    cmds.text(label=u"LƯU Ý:\nNút này được thiết kế để có thể lật một đường Curve theo trục nhưng\nvẫn cố gắng giữ lại hình dạng của đường Curve.\nNếu đã Set Proxy Mesh, đường Curve sau khi lật sẽ được điều chỉnh để\nkhông đâm vào Proxy Mesh.", align="left", font="obliqueLabelFont")
     cmds.setParent('..')
 
     # ----------------------------------------

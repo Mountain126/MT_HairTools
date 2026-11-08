@@ -4,6 +4,12 @@ import maya.cmds as cmds
 import maya.api.OpenMaya as om2
 import math
 import random
+import sys
+import MT_FlipCurves
+if sys.version_info[0] < 3:
+    reload(MT_FlipCurves)
+else:
+    __import__('importlib').reload(MT_FlipCurves)
 
 # ==========================================
 # CÁC HÀM TOÁN HỌC & TIỆN ÍCH BỔ TRỢ
@@ -711,9 +717,53 @@ def show_ui():
     cmds.setParent('..')
     
     # ----------------------------------------
-    # 2. Nhóm Guides & Generation
+    # 2. Nhóm Flip Curves
     # ----------------------------------------
-    guides_frame = cmds.frameLayout(label=" 2. Guides & Generation ", collapsable=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
+    flip_frame = cmds.frameLayout(label=" 2. Flip Curves ", collapsable=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
+    cmds.columnLayout(adjustableColumn=True, parent=flip_frame, rowSpacing=6)
+    cmds.text(
+        label="Chọn Curve, bật các trục cần lật rồi nhấn Flip Keep Form.",
+        align="left",
+        font="boldLabelFont"
+    )
+
+    flip_axes = {"X": False, "Y": False, "Z": False}
+    flip_axis_buttons = {}
+
+    def toggle_flip_axis(axis):
+        flip_axes[axis] = not flip_axes[axis]
+        color = color01(118, 180, 255) if flip_axes[axis] else color01(128, 128, 128)
+        cmds.button(flip_axis_buttons[axis], edit=True, bgc=color)
+
+    def run_flip_keep_form(*args):
+        if sys.version_info[0] < 3:
+            reload(MT_FlipCurves)
+        else:
+            __import__('importlib').reload(MT_FlipCurves)
+        axes = [axis for axis in ("X", "Y", "Z") if flip_axes[axis]]
+        MT_FlipCurves.swing_flip_curves(axes)
+
+    cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 106), (2, 106), (3, 106)], columnSpacing=[(2, 6), (3, 6)])
+    for axis in ("X", "Y", "Z"):
+        flip_axis_buttons[axis] = cmds.button(
+            label=axis,
+            h=btn_H,
+            bgc=color01(128, 128, 128),
+            command=lambda *args, axis=axis: toggle_flip_axis(axis)
+        )
+    cmds.setParent('..')
+    cmds.button(
+        label="Flip Keep Form",
+        h=btn_H,
+        bgc=color01(238, 137, 38),
+        command=run_flip_keep_form
+    )
+    cmds.setParent('..')
+
+    # ----------------------------------------
+    # 3. Nhóm Guides & Generation
+    # ----------------------------------------
+    guides_frame = cmds.frameLayout(label=" 3. Guides & Generation ", collapsable=True, collapse=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
     cmds.columnLayout(adjustableColumn=True, parent=guides_frame, rowSpacing=6)
     
     cmds.text(label="Hãy chọn các đường Curve muốn dùng làm Guide", align="left", font="boldLabelFont")
@@ -735,9 +785,9 @@ def show_ui():
     cmds.setParent('..')
     
     # ----------------------------------------
-    # 3. Nhóm Groom Modifiers
+    # 4. Nhóm Groom Modifiers
     # ----------------------------------------
-    modifiers_frame = cmds.frameLayout(label=" 3. Groom Modifiers ", collapsable=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
+    modifiers_frame = cmds.frameLayout(label=" 4. Groom Modifiers ", collapsable=True, collapse=True, parent=column_main, bgc=color01(33, 41, 84), font="boldLabelFont", marginHeight=6, marginWidth=6)
     cmds.columnLayout(adjustableColumn=True, parent=modifiers_frame, rowSpacing=6)
     cmds.text(label="Có thể chọn các đường Curve để phân bố lại cho đồng đều\n(LƯU Ý: Nên chọn từng vùng nhỏ để tốc độ xử lý được trơn tru!!!)", align="left", font="boldLabelFont")
     cmds.button(label="Distribute / Relax Curves", h=btn_H, annotation="Phân bố lại khoảng cách\ncác đường curve đồng đều", command=lambda _: distribute_curves(iterations=15))

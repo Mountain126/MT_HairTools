@@ -59,7 +59,7 @@ def install_to_shelf():
             
         cmds.runTimeCommand(rtc_name, 
                             annotation="Custom Hair Tool command", 
-                            command=get_clean_command("MT_HairTools", func_name, current_dir), 
+                            command=get_clean_command("SourceCode.UI.MT_HairTools", func_name, current_dir),
                             commandLanguage="python", 
                             category=category)
         
@@ -97,7 +97,7 @@ def install_to_shelf():
     cmds.shelfButton(
         annotation=hair_annotation,
         image1=hair_icon_path,
-        command=get_clean_command("MT_HairTools", "show_ui", current_dir),
+        command=get_clean_command("SourceCode.UI.MT_HairTools", "show_ui", current_dir),
         sourceType="python"
     )
     
@@ -105,7 +105,7 @@ def install_to_shelf():
     cmds.shelfButton(
         annotation=replace_annotation,
         image1=replace_icon_path,
-        command=get_clean_command("MT_ReplaceMesh", "MT_ReplaceMesh", current_dir),
+        command=get_clean_command("SourceCode.UI.MT_ReplaceMesh", "MT_ReplaceMesh", current_dir),
         sourceType="python"
     )
 
@@ -114,7 +114,7 @@ def install_to_shelf():
     # if current_dir_safe not in sys.path:
     #     sys.path.insert(0, current_dir_safe)
         
-    # import MT_HairTools
+    # from SourceCode.UI import MT_HairTools
     # if sys.version_info[0] < 3:
     #     reload(MT_HairTools)
     # else:

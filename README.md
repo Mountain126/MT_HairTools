@@ -4,8 +4,12 @@ MT_HairTools installation
 
 	Example of the final folder structure:
 
-	Documents\Maya\2024\scripts\MT_HairTools\MT_HairTools.py
-	Documents\Maya\2024\scripts\MT_HairTools\MT_ReplaceMesh.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\UI\MT_HairTools.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\UI\MT_ReplaceMesh.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\Logic\hair_tools_logic.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\Logic\replace_mesh_logic.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\Logic\MT_FlipCurves.py
+	Documents\Maya\2024\scripts\MT_HairTools\SourceCode\Logic\MT_MirrorMesh.py
 	Documents\Maya\2024\scripts\MT_HairTools\install.py
 	Documents\Maya\2024\scripts\MT_HairTools\icons\MT_HairTools_icon.png
 

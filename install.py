@@ -49,7 +49,7 @@ def install_to_shelf():
         "MT_Distribute_RTC": "distribute_curves",
         "MT_Randomize_RTC": "randomize_curves",
         "MT_AlignHair_RTC": "align_and_deform_curves",
-        "MT_ShowHairUI_RTC": "show_ui"
+        "MT_SelectionCounterUI_RTC": "show_counter"
     }
 
     category = "CustomHairTools"
@@ -57,9 +57,14 @@ def install_to_shelf():
         if cmds.runTimeCommand(rtc_name, exists=True):
             cmds.runTimeCommand(rtc_name, edit=True, delete=True)
             
+        module_name = (
+            "SourceCode.Logic.MT_SelectionCounter"
+            if rtc_name == "MT_SelectionCounterUI_RTC"
+            else "SourceCode.UI.MT_HairTools"
+        )
         cmds.runTimeCommand(rtc_name, 
                             annotation="Custom Hair Tool command", 
-                            command=get_clean_command("SourceCode.UI.MT_HairTools", func_name, current_dir),
+                            command=get_clean_command(module_name, func_name, current_dir),
                             commandLanguage="python", 
                             category=category)
         
@@ -69,6 +74,7 @@ def install_to_shelf():
     try:
         cmds.hotkey(keyShortcut='3', altModifier=True, name="MT_SnapCurve_RTC_NameCmd")
         cmds.hotkey(keyShortcut='4', altModifier=True, name="MT_SnapCV0_RTC_NameCmd")
+        cmds.hotkey(keyShortcut='0', name="MT_SelectionCounterUI_RTC_NameCmd")
     except Exception:
         pass
 

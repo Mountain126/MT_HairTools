@@ -112,13 +112,15 @@ def swing_flip_curves(mirror_axes):
         cmds.warning("Không tìm thấy NURBS Curve nào trong đối tượng đang chọn.")
         return
 
-    import MT_HairTools
-    proxy_shape = MT_HairTools.get_proxy_mesh()
-    if not proxy_shape:
-        cmds.warning("Không tìm thấy mesh shape của Proxy Mesh; không thể hiệu chỉnh khoảng cách Curve.")
-        return
-
-    mesh_fn = om.MFnMesh(om.MSelectionList().add(proxy_shape).getDagPath(0))
+    proxy_list = cmds.ls('*.isHairCardProxy', objectsOnly=True) or []
+    proxy_shapes = (
+        cmds.listRelatives(
+            proxy_list[0], allDescendents=True, type='mesh', fullPath=True
+        ) or []
+    ) if proxy_list else []
+    mesh_fn = None
+    if proxy_shapes:
+        mesh_fn = om.MFnMesh(om.MSelectionList().add(proxy_shapes[0]).getDagPath(0))
 
     cmds.undoInfo(openChunk=True)
     try:
@@ -132,10 +134,10 @@ def swing_flip_curves(mirror_axes):
                 om.MVector(*cmds.xform(cv, query=True, worldSpace=True, translation=True))
                 for cv in cvs
             ]
-            original_surface_data = [
-                get_surface_distance_and_side(mesh_fn, point)
-                for point in pts
-            ]
+            original_surface_data = (
+                [get_surface_distance_and_side(mesh_fn, point) for point in pts]
+                if mesh_fn is not None else None
+            )
 
             # 2. Lần lượt biến đổi tọa độ qua từng trục được kích hoạt
             for axis in mirror_axes:
@@ -168,7 +170,8 @@ def swing_flip_curves(mirror_axes):
                     pts = [ (p - p_root) + p_root_new for p in pts ]
 
             # 3. Tối ưu góc quanh trục gốc-ngọn để giữ khoảng cách Proxy mượt hơn.
-            pts = preserve_curve_proxy_distances(mesh_fn, pts, original_surface_data)
+            if mesh_fn is not None:
+                pts = preserve_curve_proxy_distances(mesh_fn, pts, original_surface_data)
 
             # 4. Gán đủ tọa độ XYZ sau khi hiệu chỉnh theo Proxy.
             for cv, transformed in zip(cvs, pts):

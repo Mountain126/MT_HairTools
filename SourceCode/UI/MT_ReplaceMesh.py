@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import os
 import sys
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _PROJECT_ROOT not in sys.path:

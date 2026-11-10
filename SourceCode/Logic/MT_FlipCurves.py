@@ -1,6 +1,8 @@
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 import math
+import sys
+
 
 def mirror_vector(vec, axis):
     if axis == 'X':
@@ -12,20 +14,50 @@ def mirror_vector(vec, axis):
     return om.MVector(vec)
 
 
-def get_surface_distance_and_side(mesh_fn, point):
-    maya_point = om.MPoint(point)
-    closest_point, _ = mesh_fn.getClosestPoint(maya_point, om.MSpace.kWorld)
-    normal, _ = mesh_fn.getClosestNormal(maya_point, om.MSpace.kWorld)
-    signed_distance = (om.MVector(maya_point) - om.MVector(closest_point)) * om.MVector(normal).normal()
-    side = -1.0 if signed_distance < 0.0 else 1.0
-    return maya_point.distanceTo(closest_point), side
+class ProxySurface(object):
+    """
+    Bọc MMeshIntersector để truy vấn điểm gần nhất trên Proxy.
+    MMeshIntersector dựng sẵn cấu trúc tăng tốc một lần, nên mỗi truy vấn nhanh hơn
+    nhiều so với MFnMesh.getClosestPoint, và trả về cả điểm lẫn pháp tuyến trong một lần gọi.
+    """
+
+    def __init__(self, dag_path):
+        # Dựng intersector trong object space (ma trận đơn vị) để không phụ thuộc
+        # vào quy ước không gian của MPointOnMesh; tự đổi world <-> object bằng ma trận.
+        self._matrix = dag_path.inclusiveMatrix()
+        self._inverse = dag_path.inclusiveMatrixInverse()
+        self._intersector = om.MMeshIntersector()
+        self._intersector.create(dag_path.node(), om.MMatrix())
+        self._max_distance = sys.float_info.max
+
+    def distance_and_side(self, point):
+        """Trả về (khoảng cách tới bề mặt trong world space, phía +1/-1 so với pháp tuyến)."""
+        world_point = om.MPoint(point)
+        local_point = world_point * self._inverse
+        hit = self._intersector.getClosestPoint(local_point, self._max_distance)
+        local_closest = om.MPoint(hit.point)
+        local_normal = om.MVector(hit.normal)
+
+        # Dấu của tích vô hướng không đổi qua phép biến đổi affine (pháp tuyến biến đổi
+        # theo ma trận nghịch đảo chuyển vị), nên xét phía ngay trong object space là đúng.
+        side = -1.0 if (local_point - local_closest) * local_normal < 0.0 else 1.0
+        world_closest = local_closest * self._matrix
+        return world_point.distanceTo(world_closest), side
 
 
 def wrap_angle(angle):
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-def preserve_curve_proxy_distances(mesh_fn, points, surface_data):
+# Các bước tìm góc: (bước nhảy, bán kính tìm kiếm) tính bằng độ, đổi sẵn sang radian.
+_SEARCH_STAGES = tuple(
+    (math.radians(step), math.radians(radius), int(round(2.0 * radius / step)) + 1)
+    for step, radius in ((15.0, 180.0), (3.0, 15.0), (0.6, 3.0))
+)
+_SMOOTHNESS_WEIGHT = 0.08
+
+
+def preserve_curve_proxy_distances(surface, points, surface_data):
     if len(points) < 3:
         return points
 
@@ -35,54 +67,80 @@ def preserve_curve_proxy_distances(mesh_fn, points, surface_data):
         return points
     axis = axis.normal()
 
+    last = len(points) - 1
     angles = [0.0] * len(points)
+
+    # Tính sẵn các đại lượng không đổi cho từng CV: tâm trên trục, bán kính r
+    # và vector vuông góc (axis x r). Khi đó điểm xoay góc a theo công thức Rodrigues:
+    # tâm + r*cos(a) + (axis x r)*sin(a), vì r luôn vuông góc với trục.
+    centers = [None] * len(points)
     radii = [None] * len(points)
-    for index in range(1, len(points) - 1):
+    binormals = [None] * len(points)
+    for index in range(1, last):
         relative = points[index] - root
         axial = axis * (relative * axis)
+        centers[index] = root + axial
         radii[index] = relative - axial
+        binormals[index] = axis ^ radii[index]
 
     def candidate_point(index, angle):
-        rotation = om.MQuaternion(angle, axis)
-        relative = points[index] - root
-        axial = axis * (relative * axis)
-        return root + axial + radii[index].rotateBy(rotation)
+        return centers[index] + radii[index] * math.cos(angle) + binormals[index] * math.sin(angle)
+
+    # Phần cost theo khoảng cách Proxy chỉ phụ thuộc (CV, góc), không phụ thuộc góc
+    # của CV lân cận, nên lưu lại để không phải truy vấn lại các góc trùng nhau
+    # (tâm của mỗi bước tìm, hai đầu -180/+180, và góc tốt nhất ở vòng lặp sau).
+    surface_cache = [dict() for _ in points]
+
+    def surface_cost(index, angle):
+        key = round(angle, 10)
+        cache = surface_cache[index]
+        cost = cache.get(key)
+        if cost is None:
+            target_distance, target_side = surface_data[index]
+            distance, side = surface.distance_and_side(candidate_point(index, angle))
+            distance_scale = max(target_distance, 0.1)
+            cost = ((distance - target_distance) / distance_scale) ** 2
+            if target_distance > 1e-5 and side != target_side:
+                cost += 4.0
+            cache[key] = cost
+        return cost
 
     def candidate_cost(index, angle):
-        point = candidate_point(index, angle)
-        target_distance, target_side = surface_data[index]
-        distance, side = get_surface_distance_and_side(mesh_fn, point)
-        distance_scale = max(target_distance, 0.1)
-        cost = ((distance - target_distance) / distance_scale) ** 2
-        if target_distance > 1e-5 and side != target_side:
-            cost += 4.0
-
-        smoothness_weight = 0.08
+        cost = surface_cost(index, angle)
         for neighbor in (index - 1, index + 1):
             angle_delta = wrap_angle(angle - angles[neighbor])
-            cost += smoothness_weight * (angle_delta / math.pi) ** 2
+            cost += _SMOOTHNESS_WEIGHT * (angle_delta / math.pi) ** 2
         return cost
 
     for _ in range(3):
-        for index in range(1, len(points) - 1):
+        for index in range(1, last):
             best_angle = angles[index]
             best_cost = candidate_cost(index, best_angle)
-            for step_degrees, search_radius in ((15.0, 180.0), (3.0, 15.0), (0.6, 3.0)):
-                step = math.radians(step_degrees)
-                radius = math.radians(search_radius)
-                sample_count = int(round(2.0 * radius / step)) + 1
-                center = best_angle
+            for step, radius, sample_count in _SEARCH_STAGES:
+                start = best_angle - radius
                 for sample in range(sample_count):
-                    candidate = wrap_angle(center - radius + sample * step)
+                    candidate = wrap_angle(start + sample * step)
                     cost = candidate_cost(index, candidate)
                     if cost < best_cost:
                         best_angle, best_cost = candidate, cost
             angles[index] = best_angle
 
     return [
-        candidate_point(index, angles[index]) if 0 < index < len(points) - 1 else point
+        candidate_point(index, angles[index]) if 0 < index < last else point
         for index, point in enumerate(points)
     ]
+
+
+def _get_proxy_surface():
+    proxy_list = cmds.ls('*.isHairCardProxy', objectsOnly=True) or []
+    if not proxy_list:
+        return None
+    proxy_shapes = cmds.listRelatives(
+        proxy_list[0], allDescendents=True, type='mesh', fullPath=True
+    ) or []
+    if not proxy_shapes:
+        return None
+    return ProxySurface(om.MSelectionList().add(proxy_shapes[0]).getDagPath(0))
 
 
 def swing_flip_curves(mirror_axes):
@@ -112,31 +170,21 @@ def swing_flip_curves(mirror_axes):
         cmds.warning("Không tìm thấy NURBS Curve nào trong đối tượng đang chọn.")
         return
 
-    proxy_list = cmds.ls('*.isHairCardProxy', objectsOnly=True) or []
-    proxy_shapes = (
-        cmds.listRelatives(
-            proxy_list[0], allDescendents=True, type='mesh', fullPath=True
-        ) or []
-    ) if proxy_list else []
-    mesh_fn = None
-    if proxy_shapes:
-        mesh_fn = om.MFnMesh(om.MSelectionList().add(proxy_shapes[0]).getDagPath(0))
+    surface = _get_proxy_surface()
 
     cmds.undoInfo(openChunk=True)
     try:
         for shape in curve_shapes:
-            cvs = cmds.ls(f"{shape}.cv[*]", flatten=True)
-            if len(cvs) < 2:
+            # 1. Đọc tọa độ World của toàn bộ CV bằng API trong một lần gọi
+            #    (thay cho việc gọi cmds.xform query từng CV).
+            curve_fn = om.MFnNurbsCurve(om.MSelectionList().add(shape).getDagPath(0))
+            pts = [om.MVector(p) for p in curve_fn.cvPositions(om.MSpace.kWorld)]
+            if len(pts) < 2:
                 continue
 
-            # 1. Lấy tọa độ World hiện tại của toàn bộ CV (1, 2, 3, 4...)
-            pts = [
-                om.MVector(*cmds.xform(cv, query=True, worldSpace=True, translation=True))
-                for cv in cvs
-            ]
             original_surface_data = (
-                [get_surface_distance_and_side(mesh_fn, point) for point in pts]
-                if mesh_fn is not None else None
+                [surface.distance_and_side(point) for point in pts]
+                if surface is not None else None
             )
 
             # 2. Lần lượt biến đổi tọa độ qua từng trục được kích hoạt
@@ -159,24 +207,20 @@ def swing_flip_curves(mirror_axes):
                     q_swing = om.MQuaternion(v_orig.normal(), v_new.normal())
 
                     # Tính tọa độ mới cho từng CV dựa trên độ lệch so với điểm gốc 1
-                    new_pts = []
-                    for p in pts:
-                        d = p - p_root
-                        d_rotated = d.rotateBy(q_swing)
-                        new_pts.append(p_root_new + d_rotated)
-                    pts = new_pts
+                    pts = [p_root_new + (p - p_root).rotateBy(q_swing) for p in pts]
                 else:
                     # Trường hợp Curve kín (điểm đầu trùng điểm cuối): chỉ dịch tâm qua trục
-                    pts = [ (p - p_root) + p_root_new for p in pts ]
+                    pts = [(p - p_root) + p_root_new for p in pts]
 
             # 3. Tối ưu góc quanh trục gốc-ngọn để giữ khoảng cách Proxy mượt hơn.
-            if mesh_fn is not None:
-                pts = preserve_curve_proxy_distances(mesh_fn, pts, original_surface_data)
+            if surface is not None:
+                pts = preserve_curve_proxy_distances(surface, pts, original_surface_data)
 
-            # 4. Gán đủ tọa độ XYZ sau khi hiệu chỉnh theo Proxy.
-            for cv, transformed in zip(cvs, pts):
+            # 4. Gán tọa độ bằng cmds.xform để thao tác vẫn Undo được
+            #    (ghi trực tiếp bằng OpenMaya sẽ không vào undo chunk).
+            for index, transformed in enumerate(pts):
                 cmds.xform(
-                    cv,
+                    f"{shape}.cv[{index}]",
                     worldSpace=True,
                     translation=(transformed.x, transformed.y, transformed.z)
                 )
@@ -184,8 +228,8 @@ def swing_flip_curves(mirror_axes):
             # Đặt rotate/scale pivot của transform tại CV0 mới.
             parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
             if parents:
-                root_position = cmds.xform(cvs[0], query=True, worldSpace=True, translation=True)
-                cmds.xform(parents[0], worldSpace=True, pivots=root_position)
+                root = pts[0]
+                cmds.xform(parents[0], worldSpace=True, pivots=(root.x, root.y, root.z))
 
     finally:
         cmds.undoInfo(closeChunk=True)

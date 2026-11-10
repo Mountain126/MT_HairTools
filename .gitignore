@@ -1,7 +1,7 @@
 # Bỏ qua thư mục bộ nhớ đệm của Python hoặc Godot
 __pycache__/
 .godot/
-.pyc
+*.pyc
 
 # Bỏ qua tất cả các file có đuôi .log hoặc .tmp
 *.log
@@ -9,3 +9,7 @@ __pycache__/
 
 # Bỏ qua file chứa mật khẩu, token cấu hình
 .env
+
+# Bỏ qua cấu hình riêng của từng máy (đường dẫn Maya, user Windows khác nhau)
+.vscode/
+.claude/settings.local.json

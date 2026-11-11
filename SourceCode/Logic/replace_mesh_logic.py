@@ -549,8 +549,9 @@ class ReplaceMeshLogic(object):
                 try: cmds.setAttr("{0}.{1}".format(warps[0], attr), val)
                 except: pass
 
-    def _find_curve_orientation(self, curve, curve_shape):
-        """Tìm giá trị orientation (số) trên curve, shape hoặc các node nối với curve (vd GS CurveTools)."""
+    def _find_curve_orientation(self, curve, curve_shape, verbose=True):
+        """Tìm giá trị orientation (số) trên curve, shape hoặc các node nối với curve (vd GS CurveTools).
+        verbose=False: không in ra Script Editor (in nhiều dòng làm Maya chậm khi xử lý hàng loạt)."""
         nodes = [curve, curve_shape]
         for src in (curve, curve_shape):
             for n in (cmds.listConnections(src, source=True, destination=True) or []):
@@ -581,11 +582,13 @@ class ReplaceMeshLogic(object):
                     val = cmds.getAttr(plug)
                 except Exception:
                     continue
-                om.MGlobal.displayInfo(u"Orientation lấy từ {0} = {1}".format(plug, val))
+                if verbose:
+                    om.MGlobal.displayInfo(u"Orientation lấy từ {0} = {1}".format(plug, val))
                 return val
 
-        om.MGlobal.displayInfo(u"Không tìm thấy attribute Orientation trên curve '{0}'. Các node đã quét: {1}".format(curve, nodes))
-        return 0.0
+        if verbose:
+            om.MGlobal.displayInfo(u"Không tìm thấy attribute Orientation trên curve '{0}'. Các node đã quét: {1}".format(curve, nodes))
+        return None
 
     def find_curve_crossings(self):
         if not self.source_memory:
@@ -650,18 +653,62 @@ class ReplaceMeshLogic(object):
         if not curves:
             cmds.warning(u"Vui lòng chọn ÍT NHẤT 1 Curve.")
             return
-            
+
+        # Tăng tốc khi xử lý nhiều curve: tạm dừng vẽ lại viewport và chặn sync_ui
+        # (scriptJob SelectionChanged chạy mỗi lần duplicate làm đổi selection).
+        # Gom thành 1 undo chunk để Ctrl+Z hoàn tác cả lần chạy.
+        self._suspend_sync_ui = True
+        cmds.undoInfo(openChunk=True, chunkName="MT_ReplaceMeshToCurves")
+        refresh_suspended = False
+        try:
+            try:
+                cmds.refresh(suspend=True)
+                refresh_suspended = True
+            except Exception:
+                pass
+            last_created_mesh, success_count, no_orient = self._apply_warp_curves(curves, mesh_uuids)
+        finally:
+            if refresh_suspended:
+                cmds.refresh(suspend=False)
+            cmds.undoInfo(closeChunk=True)
+            self._suspend_sync_ui = False
+
+        if no_orient:
+            om.MGlobal.displayInfo(u"Có {0} curve không tìm thấy attribute Orientation, dùng rotation mặc định.".format(no_orient))
+        if last_created_mesh and cmds.objExists(last_created_mesh):
+            cmds.select(last_created_mesh)
+            self.sync_ui()
+            om.MGlobal.displayInfo(u"Thành công! Đã tạo Curve Warp cho {0} đường curve.".format(success_count))
+
+    def _apply_warp_curves(self, curves, mesh_uuids):
         last_created_mesh = None
         success_count = 0
-        
+        no_orient = 0
+        z_up = cmds.upAxis(query=True, axis=True) == 'z'
+
+        # Quét scene MỘT lần để lập bảng UUID curve -> các mesh warp đã gắn UUID đó.
+        # Trước đây mỗi curve lại quét toàn bộ transform trong scene nên rất chậm khi chọn nhiều curve.
+        meshes_by_curve_uuid = {}
+        tagged = cmds.ls("*.{0}".format(CURVE_UUID_ATTR), long=True, objectsOnly=True, recursive=True) or []
+        for obj in cmds.ls(tagged, type="transform", long=True) or []:
+            try:
+                value = cmds.getAttr("{0}.{1}".format(obj, CURVE_UUID_ATTR))
+            except Exception:
+                continue
+            if value:
+                meshes_by_curve_uuid.setdefault(value, []).append(obj)
+
         for curve in curves:
             try:
                 curve_shapes = cmds.listRelatives(curve, shapes=True, fullPath=True)
                 if not curve_shapes: continue
                 curve_shape = curve_shapes[0]
-                
+
                 # --- KIỂM TRA VÀ LẤY THÔNG SỐ ORIENTATION LINH HOẠT ---
-                custom_orient = self._find_curve_orientation(curve, curve_shape)
+                custom_orient = self._find_curve_orientation(curve, curve_shape, verbose=False)
+                if custom_orient is None:
+                    no_orient += 1
+                    custom_orient = 0.0
                 # -------------------------------------------------------------
 
                 curve_uuid = _get_uuid(curve)
@@ -673,9 +720,8 @@ class ReplaceMeshLogic(object):
                         for p in cmds.listRelatives(d_shape, parent=True, fullPath=True) or []:
                             if p not in old_meshes:
                                 old_meshes.append(p)
-                for obj in cmds.ls(type="transform", long=True):
-                    if obj not in old_meshes and cmds.attributeQuery(CURVE_UUID_ATTR, node=obj, exists=True) \
-                            and cmds.getAttr("{0}.{1}".format(obj, CURVE_UUID_ATTR)) == curve_uuid:
+                for obj in meshes_by_curve_uuid.get(curve_uuid, ()):
+                    if obj not in old_meshes and cmds.objExists(obj):
                         old_meshes.append(obj)
 
                 inherit_parent = None
@@ -765,18 +811,14 @@ class ReplaceMeshLogic(object):
                 # --- ÁP DỤNG GIÁ TRỊ ORIENT LẤY ĐƯỢC VÀO THUỘC TÍNH ROTATION CỦA WARP NODE ---
                 if custom_orient != 0.0:
                     # Z-up: bù -90 độ; Y-up: đảo hướng 180 - orient
-                    z_up = cmds.upAxis(query=True, axis=True) == 'z'
                     cmds.setAttr("{0}.rotation".format(warp_node), custom_orient - 90.0 if z_up else custom_orient)
 
                 success_count += 1
-                
+
             except Exception as e:
                 cmds.warning(u"Lỗi ở curve '{0}': {1}".format(curve, str(e)))
-                
-        if last_created_mesh and cmds.objExists(last_created_mesh):
-            cmds.select(last_created_mesh)
-            self.sync_ui()
-            om.MGlobal.displayInfo(u"Thành công! Đã tạo Curve Warp cho {0} đường curve.".format(success_count))
+
+        return last_created_mesh, success_count, no_orient
 
     def export_to_zbrush(self):
         if not cmds.pluginInfo('objExport', query=True, loaded=True):
@@ -794,47 +836,70 @@ class ReplaceMeshLogic(object):
             cmds.warning(u"Vui lòng chọn mesh gốc hoặc mesh con cần xuất.")
             return
 
-        source_ids = []
+        # Phân loại selection:
+        # - Mesh gốc (dấu Library trùng UUID của chính nó, hoặc không có dấu): xuất toàn bộ mesh con của nó.
+        # - Mesh con (dấu Library trỏ tới mesh gốc khác): chỉ xuất đúng mesh đang chọn.
+        root_ids = []
+        picked_children = []
         for node in selection:
-            for source_id in _export_source_ids(node):
-                if source_id not in source_ids:
-                    source_ids.append(source_id)
-        if not source_ids:
+            own_uuid = _get_uuid(node)
+            ids = _export_source_ids(node)
+            if own_uuid and own_uuid in ids:
+                if own_uuid not in root_ids:
+                    root_ids.append(own_uuid)
+            elif ids:
+                picked_children.append((node, ids))
+        if not root_ids and not picked_children:
             cmds.warning(u"Không đọc được UUID của mesh đang chọn.")
             return
 
         source_names = {}
-        missing = 0
-        for source_id in source_ids:
-            source_node = _resolve_uuid(source_id)
-            if not source_node:
-                missing += 1
-                continue
-            source_names[source_id] = _safe_dir_name(source_node.split("|")[-1])
-        if not source_names:
-            cmds.warning(u"Mesh gốc không còn tồn tại trong scene.")
-            return
-        if missing:
-            cmds.warning(u"Bỏ qua {0} mesh gốc vì không còn trong scene.".format(missing))
+
+        def _source_name(source_id):
+            """Tên thư mục theo mesh gốc; None nếu mesh gốc không còn trong scene."""
+            if source_id not in source_names:
+                source_node = _resolve_uuid(source_id)
+                source_names[source_id] = _safe_dir_name(source_node.split("|")[-1]) if source_node else None
+            return source_names[source_id]
 
         found_meshes = []
         seen = set()
-        attr_names = []
-        for attr_name in (LIBRARY_MESH_ATTR, WARP_LIBRARY_MESH_ATTR):
-            attr_names.extend(_library_attr_names(attr_name))
-        for name in attr_names:
-            for obj in cmds.ls("*.{0}".format(name), long=True, objectsOnly=True) or []:
-                if obj in seen:
-                    continue
-                stored = _get_string_attr(obj, name)
-                if stored not in source_names:
-                    continue
-                # Mesh gốc: attribute trùng UUID hiện tại của node, không export.
-                node_uuid = _get_uuid(obj)
-                if node_uuid and stored == node_uuid:
-                    continue
-                seen.add(obj)
-                found_meshes.append((obj, stored))
+        missing = 0
+
+        # Mesh con được chọn trực tiếp: lấy mesh gốc đầu tiên còn tồn tại để đặt tên thư mục.
+        for node, ids in picked_children:
+            source_id = next((i for i in ids if _source_name(i)), None)
+            if source_id is None:
+                missing += 1
+                continue
+            if node not in seen:
+                seen.add(node)
+                found_meshes.append((node, source_id))
+
+        # Mesh gốc được chọn: quét scene tìm toàn bộ mesh con của nó.
+        valid_roots = [r for r in root_ids if _source_name(r)]
+        missing += len(root_ids) - len(valid_roots)
+        root_ids = valid_roots
+        if root_ids:
+            attr_names = []
+            for attr_name in (LIBRARY_MESH_ATTR, WARP_LIBRARY_MESH_ATTR):
+                attr_names.extend(_library_attr_names(attr_name))
+            for name in attr_names:
+                for obj in cmds.ls("*.{0}".format(name), long=True, objectsOnly=True) or []:
+                    if obj in seen:
+                        continue
+                    stored = _get_string_attr(obj, name)
+                    if stored not in root_ids:
+                        continue
+                    # Mesh gốc: attribute trùng UUID hiện tại của node, không export.
+                    node_uuid = _get_uuid(obj)
+                    if node_uuid and stored == node_uuid:
+                        continue
+                    seen.add(obj)
+                    found_meshes.append((obj, stored))
+
+        if missing:
+            cmds.warning(u"Bỏ qua {0} mesh vì mesh gốc không còn trong scene.".format(missing))
 
         if not found_meshes:
             cmds.warning(u"Chưa có mesh con nào để xuất từ các mesh gốc đang chọn.")

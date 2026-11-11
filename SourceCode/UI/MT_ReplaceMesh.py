@@ -155,6 +155,9 @@ class MT_ReplaceMesh(logic.ReplaceMeshLogic):
             cmds.textFieldButtonGrp(self.tf_root_folder, edit=True, text=folder[0])
 
     def sync_ui(self):
+        # Bỏ qua khi logic đang xử lý hàng loạt (vd Replace Mesh To Curves) để không chạy lại cho từng mesh.
+        if getattr(self, "_suspend_sync_ui", False):
+            return
         sel = cmds.ls(selection=True, long=True)
         if not sel: return
         obj = sel[-1] 

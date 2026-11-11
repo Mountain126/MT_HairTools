@@ -6,6 +6,16 @@ import maya.cmds as cmds
 import maya.OpenMaya as om
 import maya.OpenMayaUI as omui
 
+if sys.version_info[0] >= 3:
+    from importlib import reload as _reload
+else:
+    _reload = reload     # Python 2: reload là hàm có sẵn
+
+# Thanh Transform Type-In (giao diện Qt). Reload cùng file này để mở lại tool là nhận code mới;
+# file UI tự reload logic transform_typein.
+from SourceCode.UI import MT_TransformTypeIn as typein_ui
+_reload(typein_ui)
+
 def color01(r, g, b):
     return (r/255.0, g/255.0, b/255.0)
 
@@ -19,16 +29,29 @@ CONTENT_MIN_WIDTH = WINDOW_WIDTH - 16
 TITLE_BG = "#212954"
 ROW_SPACING = 6
 TEXT_HEIGHT = 26
-# 5 separator + 3 dòng chữ + bảng 6 dòng + 2 hàng nút + khoảng cách giữa 11 phần tử
+# Khung kích thước: hàng X/Y/Z chia 3 phần đều nhau theo bề rộng cửa sổ.
+SIZE_AXIS_LABEL_WIDTH = 16
+SIZE_LABEL_GAP = 4      # khoảng cách giữa chữ trục và ô số
+SIZE_GROUP_GAP = 6      # nửa khoảng cách giữa 2 nhóm trục liền nhau
+# Số đối tượng tối đa được gắn scriptJob theo dõi rotate/scale, tránh tạo quá nhiều job.
+SIZE_WATCH_LIMIT = 50
+# Phần Transform Type-In: thanh Qt xếp dọc 4 hàng (World/Move, X, Y, Z).
+TYPEIN_HEIGHT = typein_ui.TYPEIN_EMBED_HEIGHT
+# 7 separator + 3 dòng chữ + bảng polycount 6 dòng + bảng kích thước 2 dòng
+# + phần Type-In + 2 hàng nút + khoảng cách giữa 15 phần tử
 KNOWN_MIN_HEIGHT = (
-    (4 * 5)
+    (4 * 7)
     + (TEXT_HEIGHT * 3)
     + ((TEXT_HEIGHT * 6) + (4 * 5))
+    + ((TEXT_HEIGHT * 2) + 4)
+    + TYPEIN_HEIGHT
     + 28
     + 28
-    + (ROW_SPACING * 10)
+    + (ROW_SPACING * 14)
     + 2
 )
+
+SIZE_AXES = ("X", "Y", "Z")
 
 POLY_ROWS = (
     ("vertex", "Verts:"),
@@ -49,6 +72,8 @@ class MT_SelectionCounter(object):
         self._base_min_h = self._floor_h
         self._clamping = False
         self._layer_jobs = {}
+        self._size_jobs = []
+        self._size_roots = []
         self.build_ui()
         self.setup_scriptjob()
 
@@ -131,7 +156,53 @@ class MT_SelectionCounter(object):
         cmds.setParent("..")
 
         cmds.separator(height=4, style="in")
-        
+
+        # Kích thước tổng (bounding box world space) của toàn bộ đối tượng đang chọn.
+        # Hàng trên: tiêu đề Dimensions ở giữa. Hàng dưới: X [ô] Y [ô] Z [ô], đơn vị nằm trong ô.
+        self.size_layout = cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
+        self.size_title = cmds.text(
+            label="Dimensions", align="center", font="boldLabelFont", height=TEXT_HEIGHT
+        )
+        size_row = cmds.formLayout(numberOfDivisions=300, height=TEXT_HEIGHT)
+        self.size_axis_labels = []
+        self.size_cells = []
+        attach_form = []
+        attach_position = []
+        attach_control = []
+        for index, axis in enumerate(SIZE_AXES):
+            label = cmds.text(
+                label=axis, align="left", font="boldLabelFont",
+                width=SIZE_AXIS_LABEL_WIDTH, height=TEXT_HEIGHT,
+            )
+            cell = cmds.text(label="-", align="right", font="boldLabelFont", height=TEXT_HEIGHT)
+            left_gap = 0 if index == 0 else SIZE_GROUP_GAP
+            right_gap = 0 if index == len(SIZE_AXES) - 1 else SIZE_GROUP_GAP
+            attach_form.extend([(label, "top", 0), (cell, "top", 0)])
+            attach_position.extend([
+                (label, "left", left_gap, index * 100),
+                (cell, "right", right_gap, (index + 1) * 100),
+            ])
+            attach_control.append((cell, "left", SIZE_LABEL_GAP, label))
+            self.size_axis_labels.append(label)
+            self.size_cells.append(cell)
+        cmds.formLayout(
+            size_row,
+            edit=True,
+            attachForm=attach_form,
+            attachPosition=attach_position,
+            attachControl=attach_control,
+        )
+        cmds.setParent("..")
+        cmds.setParent("..")
+
+        cmds.separator(height=4, style="in")
+
+        # Transform Type-In giống panel MT Tools: ô nhập + spinner, tự đổi theo tool Move/Rotate/Scale.
+        self.typein_holder = typein_ui.embed_typein(self.main_layout, on_changed=self.update_size)
+        cmds.setParent(self.main_layout)
+
+        cmds.separator(height=4, style="in")
+
         # Các nút hỗ trợ chọn lọc nhanh
         # formLayout chia 50/50 để hai nút luôn lấp đầy bề rộng cửa sổ.
         self.button_layout = cmds.formLayout(height=28)
@@ -182,6 +253,13 @@ class MT_SelectionCounter(object):
         for event in ("SelectionChanged", "Undo", "Redo"):
             job_id = cmds.scriptJob(event=[event, self.update_counter], parent=self.main_layout)
             self.job_ids.append(job_id)
+        # Thả chuột sau khi kéo manipulator (move/rotate/scale object hoặc component)
+        # thì tính lại kích thước, vì selection không đổi nên SelectionChanged không chạy.
+        try:
+            job_id = cmds.scriptJob(event=["DragRelease", self.update_size], parent=self.main_layout)
+            self.job_ids.append(job_id)
+        except Exception:
+            pass
         # Một số bản Maya vẫn cho kéo floating panel nhỏ hơn minimum, nên kẹp lại khi idle.
         job_id = cmds.scriptJob(event=["idle", self._clamp_if_smaller], parent=self.main_layout)
         self.job_ids.append(job_id)
@@ -195,6 +273,7 @@ class MT_SelectionCounter(object):
             if job_id and cmds.scriptJob(exists=job_id):
                 cmds.scriptJob(kill=job_id, force=True)
         self._layer_jobs = {}
+        self._kill_size_jobs()
 
     def _ui_exists(self):
         return cmds.workspaceControl(self.window_name, exists=True)
@@ -355,6 +434,29 @@ class MT_SelectionCounter(object):
         for cells in getattr(self, "poly_cells", {}).values():
             for control in cells:
                 self._style_label(control, boxed=True)
+        self._style_label(getattr(self, "size_title", None), boxed=False)
+        for control in getattr(self, "size_axis_labels", []):
+            self._style_label(control, boxed=False)
+        for control in getattr(self, "size_cells", []):
+            self._style_label(control, boxed=True)
+            self._make_copyable(control)
+
+    def _make_copyable(self, control):
+        """Cho bôi đen và copy số (Ctrl+C hoặc click phải > Copy). QLabel vốn chỉ đọc nên không nhập được."""
+        if not control or not cmds.control(control, exists=True):
+            return
+        QtCore, QtWidgets = self._qt_modules()
+        widget = self._wrap(omui.MQtUtil.findControl(control), QtWidgets.QLabel)
+        if widget is None:
+            return
+        # PySide6 bản mới chỉ nhận tên enum đầy đủ, PySide2 dùng tên ngắn.
+        flag_scope = getattr(QtCore.Qt, "TextInteractionFlag", QtCore.Qt)
+        cursor_scope = getattr(QtCore.Qt, "CursorShape", QtCore.Qt)
+        widget.setTextInteractionFlags(
+            flag_scope.TextSelectableByMouse | flag_scope.TextSelectableByKeyboard
+        )
+        widget.setCursor(cursor_scope.IBeamCursor)
+        widget.setToolTip(u"Bôi đen hoặc double-click để chọn số, rồi Ctrl+C (hoặc click phải > Copy).")
 
     def _format_count(self, value):
         try:
@@ -419,10 +521,109 @@ class MT_SelectionCounter(object):
                 cmds.text(self.txt_mesh_name, edit=True, label=u" ")
 
         self._update_polycount()
+        self._size_roots = roots
+        self.update_size()
+        self._watch_size_roots(roots)
         self._watch_display_layers()
         self._style_readouts()
         self._base_min_w = self._label_min_width()
         self._clamp_if_smaller()
+
+    def _unit_label(self):
+        """Đơn vị chiều dài đang dùng trong scene (cm, m, mm, in...)."""
+        try:
+            unit = cmds.currentUnit(query=True, linear=True) or "cm"
+        except Exception:
+            unit = "cm"
+        return unit
+
+    def _format_size(self, value):
+        """Định dạng giống phần đếm polycount: dấu chấm ngăn hàng nghìn, dấu phẩy thập phân."""
+        try:
+            number = float(value)
+        except Exception:
+            return "-"
+        text = "{0:,.2f}".format(number)
+        return text.replace(",", "_").replace(".", ",").replace("_", ".")
+
+    def _bounding_box(self, nodes):
+        """Bounding box world space gộp của các node, trả về (xmin, ymin, zmin, xmax, ymax, zmax).
+
+        exactWorldBoundingBox bám sát hình học (không bị phồng như bounding box
+        của transform khi xoay). Nếu lệnh lỗi thì lùi về xform cho từng node rồi gộp lại.
+        """
+        nodes = [node for node in nodes if cmds.objExists(node)]
+        if not nodes:
+            return None
+        try:
+            box = cmds.exactWorldBoundingBox(nodes)
+            if box and len(box) == 6:
+                return tuple(box)
+        except Exception:
+            pass
+        merged = None
+        for node in nodes:
+            try:
+                box = cmds.xform(node, query=True, boundingBox=True, worldSpace=True)
+            except Exception:
+                continue
+            if not box or len(box) != 6:
+                continue
+            if merged is None:
+                merged = list(box)
+                continue
+            for index in range(3):
+                merged[index] = min(merged[index], box[index])
+                merged[index + 3] = max(merged[index + 3], box[index + 3])
+        return tuple(merged) if merged else None
+
+    def update_size(self):
+        """Cập nhật kích thước tổng theo 3 trục X, Y, Z của vùng chọn."""
+        if not self._ui_exists() or not hasattr(self, "size_cells"):
+            return
+        unit = self._unit_label()
+        box = self._bounding_box(getattr(self, "_size_roots", []))
+        for index, ctrl in enumerate(self.size_cells):
+            if not cmds.control(ctrl, exists=True):
+                continue
+            if box is None:
+                label = "-"
+            else:
+                label = u"{0} {1}".format(
+                    self._format_size(abs(box[index + 3] - box[index])), unit
+                )
+            cmds.text(ctrl, edit=True, label=label)
+
+    def _kill_size_jobs(self):
+        for job_id in getattr(self, "_size_jobs", []):
+            if job_id and cmds.scriptJob(exists=job_id):
+                cmds.scriptJob(kill=job_id, force=True)
+        self._size_jobs = []
+
+    def _watch_size_roots(self, roots):
+        """Tính lại kích thước khi gõ giá trị rotate/scale trong Channel Box.
+
+        Kéo manipulator đã có event DragRelease lo. Chỉ gắn job khi số đối tượng
+        ít, vì mỗi đối tượng cần 2 scriptJob.
+        """
+        self._kill_size_jobs()
+        if not cmds.layout(self.main_layout, exists=True):
+            return
+        if len(roots) > SIZE_WATCH_LIMIT:
+            return
+        for node in roots:
+            if not cmds.objExists(node) or not cmds.objectType(node, isAType="transform"):
+                continue
+            for attr in ("rotate", "scale"):
+                try:
+                    job_id = cmds.scriptJob(
+                        attributeChange=[node + "." + attr, self.update_size],
+                        allChildren=True,
+                        parent=self.main_layout,
+                    )
+                except Exception:
+                    continue
+                self._size_jobs.append(job_id)
 
     def _as_int(self, value):
         if isinstance(value, dict):

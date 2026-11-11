@@ -13,3 +13,7 @@ __pycache__/
 # Bỏ qua cấu hình riêng của từng máy (đường dẫn Maya, user Windows khác nhau)
 .vscode/
 .claude/settings.local.json
+
+# Bỏ qua file rác do Windows tự tạo
+Thumbs.db
+desktop.ini

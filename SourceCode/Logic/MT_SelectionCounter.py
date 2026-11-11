@@ -33,6 +33,7 @@ TEXT_HEIGHT = 26
 SIZE_AXIS_LABEL_WIDTH = 16
 SIZE_LABEL_GAP = 4      # khoảng cách giữa chữ trục và ô số
 SIZE_GROUP_GAP = 6      # nửa khoảng cách giữa 2 nhóm trục liền nhau
+SIZE_UNIT_PAD = 6       # khoảng cách từ đơn vị tới mép phải ô kích thước
 # Số đối tượng tối đa được gắn scriptJob theo dõi rotate/scale, tránh tạo quá nhiều job.
 SIZE_WATCH_LIMIT = 50
 # Phần Transform Type-In: thanh Qt xếp dọc 4 hàng (World/Move, X, Y, Z).
@@ -440,6 +441,58 @@ class MT_SelectionCounter(object):
         for control in getattr(self, "size_cells", []):
             self._style_label(control, boxed=True)
             self._make_copyable(control)
+            self._apply_size_unit(control)
+
+    def _apply_size_unit(self, control):
+        """Hiện đơn vị màu xám ở mép phải ô kích thước, giống ô nhập của Transform Type-In.
+
+        Đơn vị là QLabel con, chuột xuyên qua, nên khi bôi đen/copy chỉ lấy được phần số.
+        """
+        if not control or not cmds.control(control, exists=True):
+            return
+        QtCore, QtWidgets = self._qt_modules()
+        widget = self._wrap(omui.MQtUtil.findControl(control), QtWidgets.QLabel)
+        if widget is None:
+            return
+        unit_widget = widget.findChild(QtWidgets.QLabel, "mtSizeUnit")
+        if unit_widget is None:
+            widget_attr = getattr(QtCore.Qt, "WidgetAttribute", QtCore.Qt)
+            align = getattr(QtCore.Qt, "AlignmentFlag", QtCore.Qt)
+            # Layout tính trên toàn bộ ô, không bị padding của stylesheet đẩy vào trong.
+            widget.setAttribute(widget_attr.WA_LayoutOnEntireRect, True)
+            unit_widget = QtWidgets.QLabel(widget)
+            unit_widget.setObjectName("mtSizeUnit")
+            unit_widget.setAttribute(widget_attr.WA_TransparentForMouseEvents, True)
+            unit_widget.setAlignment(align.AlignRight | align.AlignVCenter)
+            unit_widget.setStyleSheet(
+                "color: rgb(150, 150, 150); background: transparent; border: none; padding: 0px;"
+            )
+            layout = QtWidgets.QHBoxLayout(widget)
+            layout.setContentsMargins(0, 0, SIZE_UNIT_PAD, 0)
+            layout.setSpacing(0)
+            layout.addStretch(1)
+            layout.addWidget(unit_widget)
+        font = widget.font()
+        font.setBold(False)
+        unit_widget.setFont(font)
+        text = getattr(self, "_size_unit_text", "")
+        unit_widget.setText(text)
+        unit_widget.setVisible(bool(text))
+        # Chừa chỗ bên phải cho đơn vị để số không đè lên.
+        right = 8
+        if text:
+            metrics = unit_widget.fontMetrics()
+            if hasattr(metrics, "horizontalAdvance"):
+                right = metrics.horizontalAdvance(text) + SIZE_UNIT_PAD + 4
+            else:
+                right = metrics.width(text) + SIZE_UNIT_PAD + 4
+        widget.setStyleSheet(
+            "color: #FFFFFF;"
+            "background-color: #3A3A3A;"
+            "border: 1px solid #6A6A6A;"
+            "border-radius: 3px;"
+            "padding: 1px {0}px 1px 8px;".format(right)
+        )
 
     def _make_copyable(self, control):
         """Cho bôi đen và copy số (Ctrl+C hoặc click phải > Copy). QLabel vốn chỉ đọc nên không nhập được."""
@@ -581,18 +634,18 @@ class MT_SelectionCounter(object):
         """Cập nhật kích thước tổng theo 3 trục X, Y, Z của vùng chọn."""
         if not self._ui_exists() or not hasattr(self, "size_cells"):
             return
-        unit = self._unit_label()
         box = self._bounding_box(getattr(self, "_size_roots", []))
+        # Chỉ ghi số vào ô; đơn vị vẽ riêng (xem _apply_size_unit) để copy không dính đơn vị.
+        self._size_unit_text = "" if box is None else self._unit_label()
         for index, ctrl in enumerate(self.size_cells):
             if not cmds.control(ctrl, exists=True):
                 continue
             if box is None:
                 label = "-"
             else:
-                label = u"{0} {1}".format(
-                    self._format_size(abs(box[index + 3] - box[index])), unit
-                )
+                label = self._format_size(abs(box[index + 3] - box[index]))
             cmds.text(ctrl, edit=True, label=label)
+            self._apply_size_unit(ctrl)
 
     def _kill_size_jobs(self):
         for job_id in getattr(self, "_size_jobs", []):

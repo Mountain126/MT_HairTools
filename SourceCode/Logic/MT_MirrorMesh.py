@@ -21,9 +21,15 @@ _ROTATE = ("rotateX", "rotateY", "rotateZ")
 _DEFORMER_TYPES = ("polyMoveVertex", "curveWarp")
 MIRROR_ATTR = "mirror"
 
+# Python 2.7 (Maya 2018–2020) có thêm kiểu unicode, Python 3 chỉ có str và bytes.
+try:
+    _STRING_TYPES = (basestring,)  # type: ignore[name-defined]
+except NameError:
+    _STRING_TYPES = (str, bytes)
+
 
 def _normalize_axes(axes):
-    if isinstance(axes, (str, bytes)):
+    if isinstance(axes, _STRING_TYPES):
         axes = [axes]
     chosen = set()
     for axis in axes or []:

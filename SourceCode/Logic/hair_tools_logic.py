@@ -23,6 +23,14 @@ def get_safe_orthogonal(tangent, normal):
         vec = fallback - (fallback * normal) * normal
     return vec.normal()
 
+def _iter_next(iterator):
+    """Gọi next() cho iterator của API 2.0.
+    Maya 2018 bắt buộc truyền một tham số (next(None)), Maya 2019 trở lên thì không nhận tham số nào."""
+    try:
+        iterator.next()
+    except TypeError:
+        iterator.next(None)
+
 def get_proxy_mesh():
     proxy_list = cmds.ls('*.isHairCardProxy', objectsOnly=True)
     if not proxy_list:
@@ -523,7 +531,7 @@ def generate_curves(count=100, length=5.0, cvs_count=6):
             area = 0.5 * ((v1 - v0) ^ (v2 - v0)).length()
             triangles.append({'p0': p0, 'p1': p1, 'p2': p2, 'area': area})
             total_area += area
-        it_poly.next()
+        _iter_next(it_poly)
 
     new_curves = []
     for tri in triangles:

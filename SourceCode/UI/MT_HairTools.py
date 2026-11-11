@@ -126,6 +126,10 @@ def show_ui():
         color = color01(118, 180, 255) if flip_axes[axis] else color01(128, 128, 128)
         cmds.button(flip_axis_buttons[axis], edit=True, bgc=color)
 
+    def make_toggle_command(axis):
+        # Dùng hàm tạo closure thay cho "lambda *args, axis=axis" vì Python 2.7 không hỗ trợ cú pháp đó.
+        return lambda *args: toggle_flip_axis(axis)
+
     def run_flip_keep_form(*args):
         axes = [axis for axis in ("X", "Y", "Z") if flip_axes[axis]]
         logic.flip_keep_form(axes)
@@ -136,7 +140,7 @@ def show_ui():
             label=axis,
             h=btn_H,
             bgc=color01(128, 128, 128),
-            command=lambda *args, axis=axis: toggle_flip_axis(axis)
+            command=make_toggle_command(axis)
         )
     cmds.setParent('..')
     cmds.button(

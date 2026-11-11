@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Maya 2018 (Python 2.7) va Maya 2020+ (Python 3).
-# Khong dung unicode_literals: Maya 2018 can byte string cho ten event/flag.
+# Chạy được trên Maya 2018–2020 (Python 2.7) và Maya 2022 trở lên (Python 3).
+# Không dùng unicode_literals: Maya 2018 cần byte string cho tên event/flag.
 import sys
 import maya.cmds as cmds
 import maya.OpenMaya as om
@@ -9,7 +9,7 @@ import maya.OpenMayaUI as omui
 def color01(r, g, b):
     return (r/255.0, g/255.0, b/255.0)
 
-# Chieu rong noi dung duoc can chinh de cua so co tong be rong 380 px.
+# Chiều rộng nội dung được căn chỉnh để cửa sổ có tổng bề rộng 380 px.
 WINDOW_WIDTH = 380
 SIDE_MARGIN = 10
 POLY_LABEL_WIDTH = 54
@@ -19,7 +19,7 @@ CONTENT_MIN_WIDTH = WINDOW_WIDTH - 16
 TITLE_BG = "#212954"
 ROW_SPACING = 6
 TEXT_HEIGHT = 26
-# 5 separator + 3 dong chu + bang 6 dong + 2 hang nut + khoang cach giua 11 phan tu
+# 5 separator + 3 dòng chữ + bảng 6 dòng + 2 hàng nút + khoảng cách giữa 11 phần tử
 KNOWN_MIN_HEIGHT = (
     (4 * 5)
     + (TEXT_HEIGHT * 3)
@@ -58,7 +58,7 @@ class MT_SelectionCounter(object):
         if cmds.workspaceControl(self.window_name, exists=True):
             cmds.deleteUI(self.window_name)
 
-        # workspaceControl chan minimumWidth/Height that su, cmds.window thi khong.
+        # workspaceControl chặn minimumWidth/Height thật sự, cmds.window thì không.
         self.window = cmds.workspaceControl(
             self.window_name,
             label=self.title,
@@ -105,7 +105,7 @@ class MT_SelectionCounter(object):
 
         cmds.separator(height=4, style="in")
 
-        # Hai cot: mesh dang hien trong scene / mesh dang chon.
+        # Hai cột: mesh đang hiện trong scene / mesh đang chọn.
         self.poly_layout = cmds.rowColumnLayout(
             numberOfColumns=3,
             columnWidth=[(1, POLY_LABEL_WIDTH), (2, POLY_VALUE_WIDTH), (3, POLY_VALUE_WIDTH)],
@@ -133,7 +133,7 @@ class MT_SelectionCounter(object):
         cmds.separator(height=4, style="in")
         
         # Các nút hỗ trợ chọn lọc nhanh
-        # formLayout chia 50/50 de hai nut luon lap day be rong cua so.
+        # formLayout chia 50/50 để hai nút luôn lấp đầy bề rộng cửa sổ.
         self.button_layout = cmds.formLayout(height=28)
         btn_mesh = cmds.button(
             label=u"Select All Meshes In Group",
@@ -172,7 +172,7 @@ class MT_SelectionCounter(object):
             resizeWidth=self._floor_w,
             resizeHeight=self._floor_h,
         )
-        # Chạy cập nhật ngay lần đầu mở, rồi khoa kich thuoc toi thieu
+        # Chạy cập nhật ngay lần đầu mở, rồi khóa kích thước tối thiểu
         self.update_counter()
         cmds.evalDeferred(self._style_readouts, lowestPriority=True)
         cmds.evalDeferred(self._fit_and_lock_size, lowestPriority=True)
@@ -182,7 +182,7 @@ class MT_SelectionCounter(object):
         for event in ("SelectionChanged", "Undo", "Redo"):
             job_id = cmds.scriptJob(event=[event, self.update_counter], parent=self.main_layout)
             self.job_ids.append(job_id)
-        # Maya van cho keo floating panel nho hon minimum trong mot so ban, nen kep lai khi idle.
+        # Một số bản Maya vẫn cho kéo floating panel nhỏ hơn minimum, nên kẹp lại khi idle.
         job_id = cmds.scriptJob(event=["idle", self._clamp_if_smaller], parent=self.main_layout)
         self.job_ids.append(job_id)
         
@@ -200,19 +200,20 @@ class MT_SelectionCounter(object):
         return cmds.workspaceControl(self.window_name, exists=True)
 
     def _qt_modules(self):
+        # Maya 2025 trở lên dùng PySide6, Maya 2017–2024 dùng PySide2.
         try:
-            from PySide2 import QtCore, QtWidgets
-        except ImportError:
             from PySide6 import QtCore, QtWidgets
+        except ImportError:
+            from PySide2 import QtCore, QtWidgets
         return QtCore, QtWidgets
 
     def _wrap(self, ptr, widget_cls):
         if not ptr:
             return None
         try:
-            from shiboken2 import wrapInstance
-        except ImportError:
             from shiboken6 import wrapInstance
+        except ImportError:
+            from shiboken2 import wrapInstance
         if sys.version_info[0] < 3:
             ptr = long(ptr)
         else:
@@ -311,17 +312,17 @@ class MT_SelectionCounter(object):
         return metrics.width(label)
 
     def _style_label(self, control, boxed=False, background="transparent"):
-        """Chu trang, dam, nen o rieng cho so de tach khoi nen xam cua Maya."""
+        """Chữ trắng, đậm, nền ô riêng cho số để tách khỏi nền xám của Maya."""
         if not control or not cmds.control(control, exists=True):
             return
-        try:
-            from PySide2 import QtCore, QtWidgets
-        except ImportError:
-            from PySide6 import QtCore, QtWidgets
+        QtCore, QtWidgets = self._qt_modules()
         widget = self._wrap(omui.MQtUtil.findControl(control), QtWidgets.QLabel)
         if widget is None:
             return
-        widget.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        # PySide6 bản mới chỉ chấp nhận enum đầy đủ (Qt.WidgetAttribute.WA_StyledBackground),
+        # PySide2 thì dùng tên ngắn.
+        widget_attr = getattr(QtCore.Qt, "WidgetAttribute", QtCore.Qt)
+        widget.setAttribute(widget_attr.WA_StyledBackground, True)
         font = widget.font()
         font.setBold(True)
         if font.pointSize() > 0 and font.pointSize() < 11:
@@ -457,7 +458,7 @@ class MT_SelectionCounter(object):
         return stats
 
     def _watch_display_layers(self):
-        """Cap nhat lai khi bat/tat visibility cua display layer."""
+        """Cập nhật lại khi bật/tắt visibility của display layer."""
         if not hasattr(self, "_layer_jobs"):
             self._layer_jobs = {}
         if not cmds.layout(self.main_layout, exists=True):
@@ -482,10 +483,10 @@ class MT_SelectionCounter(object):
             self._layer_jobs[layer] = job_id
 
     def _shapes_hidden_by_display_layer(self):
-        """Mesh nam trong layer dang tat, ke ca layer gan tren group cha.
+        """Mesh nằm trong layer đang tắt, kể cả layer gắn trên group cha.
 
-        Outliner van hien visibility cua chinh mesh, nhung viewport khong ve
-        khi display layer cua group bi an.
+        Outliner vẫn hiện visibility của chính mesh, nhưng viewport không vẽ
+        khi display layer của group bị ẩn.
         """
         hidden = set()
         layers = cmds.ls(type="displayLayer") or []
@@ -558,7 +559,7 @@ class MT_SelectionCounter(object):
         ))
 
     def _top_group(self, node):
-        """Group cha cao nhat, di nguoc tu node len den khi het parent."""
+        """Group cha cao nhất, đi ngược từ node lên đến khi hết parent."""
         if not node or not cmds.objExists(node):
             return None
         current = node.split(".")[0]
@@ -574,7 +575,7 @@ class MT_SelectionCounter(object):
             current = parents[0]
 
     def _collect_under_top_groups(self, seeds, kind):
-        """Lay moi mesh hoac curve nam duoi group cha cuoi cung cua cac seed."""
+        """Lấy mọi mesh hoặc curve nằm dưới group cha cuối cùng của các seed."""
         tops = []
         for node in seeds:
             top = self._top_group(node)
@@ -647,7 +648,7 @@ class MT_SelectionCounter(object):
         )
 
     def _reveal_in_outliner(self):
-        """Cuon Outliner toi selection, cung lenh phim F (fitPanel)."""
+        """Cuộn Outliner tới selection, cùng lệnh phím F (fitPanel)."""
         def _scroll():
             panels = cmds.getPanel(type="outlinerPanel") or []
             for panel in panels:
@@ -655,7 +656,7 @@ class MT_SelectionCounter(object):
                     cmds.outlinerEditor(panel, edit=True, showSelected=True)
                 except Exception:
                     pass
-        # Cho Outliner cap nhat highlight roi moi cuon.
+        # Chờ Outliner cập nhật highlight rồi mới cuộn.
         cmds.evalDeferred(_scroll)
 
 # Hàm gọi nhanh tool

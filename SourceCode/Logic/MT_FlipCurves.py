@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 import math
@@ -19,24 +21,38 @@ class ProxySurface(object):
     Bọc MMeshIntersector để truy vấn điểm gần nhất trên Proxy.
     MMeshIntersector dựng sẵn cấu trúc tăng tốc một lần, nên mỗi truy vấn nhanh hơn
     nhiều so với MFnMesh.getClosestPoint, và trả về cả điểm lẫn pháp tuyến trong một lần gọi.
+    Maya 2018 có lỗi trong MMeshIntersector của API 2.0 (create() báo RuntimeError),
+    khi đó lùi về MFnMesh.getClosestPointAndNormal: chậm hơn nhưng cho kết quả tương đương.
     """
 
     def __init__(self, dag_path):
-        # Dựng intersector trong object space (ma trận đơn vị) để không phụ thuộc
+        # Truy vấn trong object space (ma trận đơn vị) để không phụ thuộc
         # vào quy ước không gian của MPointOnMesh; tự đổi world <-> object bằng ma trận.
         self._matrix = dag_path.inclusiveMatrix()
         self._inverse = dag_path.inclusiveMatrixInverse()
-        self._intersector = om.MMeshIntersector()
-        self._intersector.create(dag_path.node(), om.MMatrix())
         self._max_distance = sys.float_info.max
+        self._intersector = None
+        self._mesh_fn = None
+        try:
+            intersector = om.MMeshIntersector()
+            intersector.create(dag_path.node(), om.MMatrix())
+            self._intersector = intersector
+        except Exception:
+            self._mesh_fn = om.MFnMesh(dag_path)
+
+    def _closest_local(self, local_point):
+        """Điểm gần nhất và pháp tuyến tại đó, cả hai trong object space."""
+        if self._intersector is not None:
+            hit = self._intersector.getClosestPoint(local_point, self._max_distance)
+            return om.MPoint(hit.point), om.MVector(hit.normal)
+        closest, normal, _ = self._mesh_fn.getClosestPointAndNormal(local_point, om.MSpace.kObject)
+        return om.MPoint(closest), om.MVector(normal)
 
     def distance_and_side(self, point):
         """Trả về (khoảng cách tới bề mặt trong world space, phía +1/-1 so với pháp tuyến)."""
         world_point = om.MPoint(point)
         local_point = world_point * self._inverse
-        hit = self._intersector.getClosestPoint(local_point, self._max_distance)
-        local_closest = om.MPoint(hit.point)
-        local_normal = om.MVector(hit.normal)
+        local_closest, local_normal = self._closest_local(local_point)
 
         # Dấu của tích vô hướng không đổi qua phép biến đổi affine (pháp tuyến biến đổi
         # theo ma trận nghịch đảo chuyển vị), nên xét phía ngay trong object space là đúng.
@@ -220,7 +236,7 @@ def swing_flip_curves(mirror_axes):
             #    (ghi trực tiếp bằng OpenMaya sẽ không vào undo chunk).
             for index, transformed in enumerate(pts):
                 cmds.xform(
-                    f"{shape}.cv[{index}]",
+                    "{0}.cv[{1}]".format(shape, index),
                     worldSpace=True,
                     translation=(transformed.x, transformed.y, transformed.z)
                 )

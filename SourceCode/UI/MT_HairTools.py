@@ -134,6 +134,10 @@ def show_ui():
         axes = [axis for axis in ("X", "Y", "Z") if flip_axes[axis]]
         logic.flip_keep_form(axes)
 
+    def run_mirror(*args):
+        axes = [axis for axis in ("X", "Y", "Z") if flip_axes[axis]]
+        logic.mirror_curves(axes)
+
     cmds.rowColumnLayout(numberOfColumns=3, columnWidth=[(1, 109), (2, 109), (3, 109)], columnSpacing=[(2, 6), (3, 6)])
     for axis in ("X", "Y", "Z"):
         flip_axis_buttons[axis] = cmds.button(
@@ -143,12 +147,29 @@ def show_ui():
             command=make_toggle_command(axis)
         )
     cmds.setParent('..')
-    cmds.button(
+    # Hai nút Mirror (trái) và Flip Keep Form (phải) chia đôi bề rộng, dùng chung 3 nút trục X/Y/Z ở trên.
+    flip_button_row = cmds.formLayout(height=btn_H)
+    btn_flip = cmds.button(
         label="Flip Keep Form",
         h=btn_H,
         bgc=color01(238, 137, 38),
         command=run_flip_keep_form
     )
+    btn_mirror = cmds.button(
+        label="Mirror",
+        h=btn_H,
+        bgc=color01(57, 146, 255),
+        annotation="Đẩy các CV của Curve sang vị trí đối xứng qua các trục đang bật",
+        command=run_mirror
+    )
+    cmds.formLayout(
+        flip_button_row,
+        edit=True,
+        attachForm=[(btn_mirror, "left", 0), (btn_mirror, "top", 0), (btn_mirror, "bottom", 0),
+                    (btn_flip, "right", 0), (btn_flip, "top", 0), (btn_flip, "bottom", 0)],
+        attachPosition=[(btn_mirror, "right", 3, 50), (btn_flip, "left", 3, 50)],
+    )
+    cmds.setParent('..')
     cmds.text(label=u"LƯU Ý:\nNút này được thiết kế để có thể lật một đường Curve theo trục nhưng\nvẫn cố gắng giữ lại hình dạng của đường Curve.\nNếu đã Set Proxy Mesh, đường Curve sau khi lật sẽ được điều chỉnh để\nkhông đâm vào Proxy Mesh.", align="left", font="obliqueLabelFont")
     cmds.setParent('..')
 

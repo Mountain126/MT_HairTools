@@ -159,31 +159,81 @@ def _get_proxy_surface():
     return ProxySurface(om.MSelectionList().add(proxy_shapes[0]).getDagPath(0))
 
 
+def _selected_curve_shapes(mirror_axes):
+    """Lấy các node nurbsCurve từ vùng chọn. Trả về None (kèm cảnh báo) nếu không đủ điều kiện."""
+    selection = cmds.ls(selection=True, long=True)
+    if not selection:
+        cmds.warning("Vui lòng chọn ít nhất một đường Curve.")
+        return None
+
+    if not mirror_axes:
+        cmds.warning("Vui lòng bật ít nhất một trục (X, Y hoặc Z).")
+        return None
+
+    curve_shapes = []
+    for obj in selection:
+        if cmds.nodeType(obj) == "nurbsCurve":
+            shapes = [obj]
+        else:
+            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True, type="nurbsCurve") or []
+        for shape in shapes:
+            if shape not in curve_shapes:
+                curve_shapes.append(shape)
+
+    if not curve_shapes:
+        cmds.warning("Không tìm thấy NURBS Curve nào trong đối tượng đang chọn.")
+        return None
+    return curve_shapes
+
+
+def _apply_curve_points(shape, pts):
+    """Gán tọa độ World cho các CV rồi đặt pivot của transform tại CV0."""
+    # Dùng cmds.xform để thao tác vẫn Undo được
+    # (ghi trực tiếp bằng OpenMaya sẽ không vào undo chunk).
+    for index, transformed in enumerate(pts):
+        cmds.xform(
+            "{0}.cv[{1}]".format(shape, index),
+            worldSpace=True,
+            translation=(transformed.x, transformed.y, transformed.z)
+        )
+
+    parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+    if parents and pts:
+        root = pts[0]
+        cmds.xform(parents[0], worldSpace=True, pivots=(root.x, root.y, root.z))
+
+
+def mirror_curves(mirror_axes):
+    """
+    Mirror các đường NURBS Curve đang chọn qua các mặt phẳng gốc tọa độ:
+    mỗi CV được đẩy sang vị trí đối xứng (đổi dấu tọa độ World theo trục được bật).
+    Khác với Flip Keep Form, hình dáng cong cũng bị lật theo, không tối ưu theo Proxy.
+    """
+    curve_shapes = _selected_curve_shapes(mirror_axes)
+    if not curve_shapes:
+        return
+
+    cmds.undoInfo(openChunk=True)
+    try:
+        for shape in curve_shapes:
+            curve_fn = om.MFnNurbsCurve(om.MSelectionList().add(shape).getDagPath(0))
+            pts = [om.MVector(p) for p in curve_fn.cvPositions(om.MSpace.kWorld)]
+            if not pts:
+                continue
+            for axis in mirror_axes:
+                pts = [mirror_vector(p, axis) for p in pts]
+            _apply_curve_points(shape, pts)
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+
 def swing_flip_curves(mirror_axes):
     """
     Lật các đường NURBS Curve đang chọn qua các trục X, Y, Z
     bằng cách xoay vector gốc-ngọn (CV[0] -> CV[-1]) và giữ nguyên hình dáng cong.
     """
-    selection = cmds.ls(selection=True, long=True)
-    if not selection:
-        cmds.warning("Vui lòng chọn ít nhất một đường Curve.")
-        return
-
-    if not mirror_axes:
-        cmds.warning("Vui lòng bật ít nhất một trục lật (X, Y hoặc Z).")
-        return
-
-    # Lấy tất cả node nurbsCurve từ danh sách đang chọn
-    curve_shapes = []
-    for obj in selection:
-        if cmds.nodeType(obj) == "nurbsCurve":
-            curve_shapes.append(obj)
-        else:
-            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True, type="nurbsCurve") or []
-            curve_shapes.extend(shapes)
-
+    curve_shapes = _selected_curve_shapes(mirror_axes)
     if not curve_shapes:
-        cmds.warning("Không tìm thấy NURBS Curve nào trong đối tượng đang chọn.")
         return
 
     surface = _get_proxy_surface()
@@ -232,20 +282,8 @@ def swing_flip_curves(mirror_axes):
             if surface is not None:
                 pts = preserve_curve_proxy_distances(surface, pts, original_surface_data)
 
-            # 4. Gán tọa độ bằng cmds.xform để thao tác vẫn Undo được
-            #    (ghi trực tiếp bằng OpenMaya sẽ không vào undo chunk).
-            for index, transformed in enumerate(pts):
-                cmds.xform(
-                    "{0}.cv[{1}]".format(shape, index),
-                    worldSpace=True,
-                    translation=(transformed.x, transformed.y, transformed.z)
-                )
-
-            # Đặt rotate/scale pivot của transform tại CV0 mới.
-            parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
-            if parents:
-                root = pts[0]
-                cmds.xform(parents[0], worldSpace=True, pivots=(root.x, root.y, root.z))
+            # 4. Gán tọa độ mới và đặt pivot tại CV0 mới.
+            _apply_curve_points(shape, pts)
 
     finally:
         cmds.undoInfo(closeChunk=True)

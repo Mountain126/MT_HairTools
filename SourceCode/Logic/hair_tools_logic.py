@@ -678,3 +678,11 @@ def flip_keep_form(axes):
     else:
         __import__('importlib').reload(MT_FlipCurves)
     MT_FlipCurves.swing_flip_curves(axes)
+
+
+def mirror_curves(axes):
+    if sys.version_info[0] < 3:
+        reload(MT_FlipCurves)
+    else:
+        __import__('importlib').reload(MT_FlipCurves)
+    MT_FlipCurves.mirror_curves(axes)

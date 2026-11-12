@@ -36,6 +36,8 @@ SIZE_GROUP_GAP = 6      # nửa khoảng cách giữa 2 nhóm trục liền nhau
 SIZE_UNIT_PAD = 6       # khoảng cách từ đơn vị tới mép phải ô kích thước
 # Số đối tượng tối đa được gắn scriptJob theo dõi rotate/scale, tránh tạo quá nhiều job.
 SIZE_WATCH_LIMIT = 50
+# Thời gian chờ (ms) trước mỗi bước cuộn Outliner tới selection.
+OUTLINER_SCROLL_DELAY_MS = 50
 # Phần Transform Type-In: thanh Qt xếp dọc 4 hàng (World/Move, X, Y, Z).
 TYPEIN_HEIGHT = typein_ui.TYPEIN_EMBED_HEIGHT
 # 7 separator + 3 dòng chữ + bảng polycount 6 dòng + bảng kích thước 2 dòng
@@ -901,17 +903,80 @@ class MT_SelectionCounter(object):
             u"Đã chọn {0} group.".format(len(groups))
         )
 
+    def _sorted_outliner_panels(self):
+        """Các Outliner đang hiển thị và đang sắp xếp theo tên (Sort Order khác "none").
+
+        Khi Outliner sắp xếp theo tên (sortOrder = "dagName"), lệnh showSelected (cũng là
+        phím F) vẫn mở các group cha nhưng tính sai vị trí dòng nên cuộn về đầu danh sách.
+        """
+        visible = set(cmds.getPanel(visiblePanels=True) or [])
+        panels = []
+        for panel in cmds.getPanel(type="outlinerPanel") or []:
+            if panel not in visible:
+                continue
+            try:
+                order = cmds.outlinerEditor(panel, query=True, sortOrder=True)
+            except Exception:
+                continue
+            if order and order != "none":
+                panels.append(panel)
+        return panels
+
+    def _scroll_outliner_views(self, panels):
+        """Cuộn cây Qt của Outliner tới dòng đang chọn nằm cao nhất.
+
+        Dùng cho Outliner sắp xếp theo tên, nơi showSelected không tự cuộn đúng chỗ.
+        QTreeView.scrollTo đọc vị trí trên cây đang hiển thị nên đúng với mọi kiểu sắp xếp.
+        """
+        _, QtWidgets = self._qt_modules()
+        view_cls = QtWidgets.QAbstractItemView
+        hint_scope = getattr(view_cls, "ScrollHint", view_cls)
+        center = hint_scope.PositionAtCenter
+        for panel in panels:
+            root = self._wrap(omui.MQtUtil.findControl(panel), QtWidgets.QWidget)
+            if root is None:
+                continue
+            views = list(root.findChildren(QtWidgets.QTreeView))
+            # Control của panel có thể chính là cây; bọc lại đúng lớp để gọi được scrollTo.
+            if root.inherits("QTreeView"):
+                views.insert(0, self._wrap(omui.MQtUtil.findControl(panel), QtWidgets.QTreeView))
+            for view in views:
+                model = view.selectionModel()
+                if model is None:
+                    continue
+                indexes = [i for i in model.selectedIndexes() if i.column() == 0]
+                if not indexes:
+                    continue
+                # Lấy dòng nằm cao nhất trong cây để Outliner dừng ở object đầu tiên của selection.
+                indexes.sort(key=lambda i: view.visualRect(i).top())
+                view.scrollTo(indexes[0], center)
+
     def _reveal_in_outliner(self):
-        """Cuộn Outliner tới selection, cùng lệnh phím F (fitPanel)."""
-        def _scroll():
-            panels = cmds.getPanel(type="outlinerPanel") or []
-            for panel in panels:
+        """Cuộn Outliner tới selection giống phím F trong Outliner (lệnh fitPanel)."""
+        def _scroll_qt(panels):
+            try:
+                self._scroll_outliner_views(panels)
+            except Exception as error:
+                cmds.warning(u"Không cuộn được Outliner: {0}".format(error))
+
+        def _expand():
+            # showSelected mở các group cha và cuộn tới object (Outliner theo thứ tự scene).
+            for panel in cmds.getPanel(type="outlinerPanel") or []:
                 try:
                     cmds.outlinerEditor(panel, edit=True, showSelected=True)
                 except Exception:
                     pass
-        # Chờ Outliner cập nhật highlight rồi mới cuộn.
-        cmds.evalDeferred(_scroll)
+            # Outliner sắp xếp theo tên: showSelected cuộn sai, chờ cây dựng xong các dòng
+            # vừa mở rồi tự cuộn lại bằng Qt.
+            sorted_panels = self._sorted_outliner_panels()
+            if sorted_panels:
+                QtCore.QTimer.singleShot(OUTLINER_SCROLL_DELAY_MS, lambda: _scroll_qt(sorted_panels))
+
+        # Hẹn giờ bằng QTimer chứ không dùng evalDeferred(lowestPriority=True): tool có scriptJob
+        # "idle" chạy thường trực nên lệnh lowestPriority có thể không bao giờ được chạy.
+        # Chờ một chút để các scriptJob SelectionChanged chạy xong và Outliner nhận selection mới.
+        QtCore, _ = self._qt_modules()
+        QtCore.QTimer.singleShot(OUTLINER_SCROLL_DELAY_MS, _expand)
 
 # Hàm gọi nhanh tool
 def show_counter():

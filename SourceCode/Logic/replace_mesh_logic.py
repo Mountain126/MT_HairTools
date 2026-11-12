@@ -158,6 +158,15 @@ def _export_source_ids(node):
             ids.append(own_uuid)
     return ids
 
+def _has_export_mesh(node):
+    """True nếu transform còn ít nhất một mesh shape không phải intermediate (shape thật để xuất OBJ).
+    Transform chỉ còn shape intermediate (vd. sau Combine/Separate có history) vẫn giữ attribute Library
+    nhưng xuất ra OBJ rỗng, nên phải bỏ qua."""
+    if cmds.objectType(node, isAType="mesh"):
+        return not cmds.getAttr("{0}.intermediateObject".format(node))
+    shapes = cmds.listRelatives(node, shapes=True, type="mesh", noIntermediate=True, fullPath=True) or []
+    return bool(shapes)
+
 def _copy_library_marks(src, dst):
     """Mesh con giữ UUID của mesh gốc trên Library Mesh / Wrap Library Mesh, không gán sourceUUID."""
     _remove_string_attr(dst, "sourceUUID")
@@ -311,6 +320,13 @@ def find_crossings_cylinder(curves, radius=0.5, samples=300, min_angle=0.0, verb
 
 
 class ReplaceMeshLogic(object):
+    # Các control UI do lớp con MT_ReplaceMesh tạo ra khi dựng cửa sổ.
+    # Khai báo sẵn ở đây để lớp logic tự đứng được và Pylance nhận biết thuộc tính.
+    btn_load_source = None
+    btn_load_warp_source = None
+    fld_cross_tol = None
+    tf_root_folder = None
+
     def __init__(self):
         self.window_name = "MT_ReplaceMeshWindow"
         self.title = "MT Replace Mesh"
@@ -319,6 +335,19 @@ class ReplaceMeshLogic(object):
         self.warp_source_memory = []
         self.keep_placeholder = False
         self.mirror_axes = {"x": False, "y": False, "z": False}
+
+    # Các hàm dưới đây do lớp UI MT_ReplaceMesh ghi đè; bản ở đây không làm gì.
+    def _paint_library_button(self, button, count, filled, empty):
+        """Tô màu và đổi nhãn nút Library theo số mesh đã lưu."""
+        pass
+
+    def sync_ui(self):
+        """Cập nhật slider theo object đang chọn."""
+        pass
+
+    def browse_root_folder(self):
+        """Mở hộp thoại chọn thư mục gốc để export."""
+        pass
 
     def restore_libraries_from_scene(self):
         self.source_memory = _collect_library_uuids(LIBRARY_MESH_ATTR)
@@ -865,12 +894,16 @@ class ReplaceMeshLogic(object):
         found_meshes = []
         seen = set()
         missing = 0
+        no_geo = 0
 
         # Mesh con được chọn trực tiếp: lấy mesh gốc đầu tiên còn tồn tại để đặt tên thư mục.
         for node, ids in picked_children:
             source_id = next((i for i in ids if _source_name(i)), None)
             if source_id is None:
                 missing += 1
+                continue
+            if not _has_export_mesh(node):
+                no_geo += 1
                 continue
             if node not in seen:
                 seen.add(node)
@@ -896,10 +929,16 @@ class ReplaceMeshLogic(object):
                     if node_uuid and stored == node_uuid:
                         continue
                     seen.add(obj)
+                    # Transform còn attribute nhưng không còn mesh thật: xuất ra sẽ là OBJ rỗng.
+                    if not _has_export_mesh(obj):
+                        no_geo += 1
+                        continue
                     found_meshes.append((obj, stored))
 
         if missing:
             cmds.warning(u"Bỏ qua {0} mesh vì mesh gốc không còn trong scene.".format(missing))
+        if no_geo:
+            cmds.warning(u"Bỏ qua {0} transform có dấu Library nhưng không còn mesh shape (chỉ còn shape intermediate hoặc trống).".format(no_geo))
 
         if not found_meshes:
             cmds.warning(u"Chưa có mesh con nào để xuất từ các mesh gốc đang chọn.")

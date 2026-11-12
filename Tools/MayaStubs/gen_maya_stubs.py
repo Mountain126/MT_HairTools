@@ -26,6 +26,8 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.expanduser("~")
 HEADER = ["# File stub tự sinh từ Maya %s bằng mayapy, phục vụ Pylance." % cmds.about(version=True),
           "from typing import Any"]
 API_MODULES = ["OpenMaya", "OpenMayaAnim", "OpenMayaFX", "OpenMayaRender", "OpenMayaUI"]
+# API 1.0 (maya.OpenMaya...): Maya chỉ cài file .pyc và .pyd, Pylance không đọc được nên cũng cần stub.
+API1_MODULES = ["OpenMaya", "OpenMayaAnim", "OpenMayaFX", "OpenMayaMPx", "OpenMayaRender", "OpenMayaUI"]
 FLAG_RE = re.compile(r"^\s+-(\w+)\s+-(\w+)", re.M)
 
 
@@ -80,14 +82,15 @@ KEPT_DUNDERS = ("__init__", "__getitem__", "__setitem__", "__len__", "__iter__",
                 "__mul__", "__neg__", "__eq__", "__ne__", "__call__")
 
 
-def qualified_base(base, current):
-    """Tên lớp cha để ghi vào stub, kèm tên module nếu lớp cha nằm ở module API khác."""
+def qualified_base(base, current, package, siblings):
+    """Tên lớp cha để ghi vào stub, kèm tên module nếu lớp cha nằm ở module API khác cùng package."""
     if base is object:
         return None
+    # So theo tên ngắn: lớp API 2.0 có thể mang __module__ là "OpenMaya" thay vì "maya.api.OpenMaya".
     short = (getattr(base, "__module__", "") or "").split(".")[-1]
     if short == current:
         return base.__name__
-    if short in API_MODULES:
+    if short in siblings:
         return "%s.%s" % (short, base.__name__)
     return None
 
@@ -115,14 +118,15 @@ def class_lines(cls, indent="    "):
     return lines or [indent + "..."]
 
 
-def build_api_module(short):
-    module = importlib.import_module("maya.api." + short)
-    lines = HEADER + ["from maya.api import %s" % m for m in API_MODULES if m != short] + [""]
+def build_api_module(short, package="maya.api", siblings=API_MODULES):
+    """Sinh stub cho 1 module API. package: "maya.api" (API 2.0) hoặc "maya" (API 1.0)."""
+    module = importlib.import_module("%s.%s" % (package, short))
+    lines = HEADER + ["from %s import %s" % (package, m) for m in siblings if m != short] + [""]
 
     classes = [(n, v) for n, v in vars(module).items() if inspect.isclass(v) and valid(n)]
     classes.sort(key=lambda item: (len(item[1].__mro__), item[0]))
     for name, cls in classes:
-        bases = [b for b in (qualified_base(b, short) for b in cls.__bases__) if b]
+        bases = [b for b in (qualified_base(b, short, package, siblings) for b in cls.__bases__) if b]
         lines.append("class %s(%s):" % (name, ", ".join(bases)) if bases else "class %s:" % name)
         lines += class_lines(cls)
         lines.append("")
@@ -134,8 +138,8 @@ def build_api_module(short):
             lines.append("def %s(*args: Any, **kwargs: Any) -> Any: ..." % name)
         elif isinstance(value, (int, float, str)):
             lines.append("%s: %s" % (name, type(value).__name__))
-    write("maya/api/%s.pyi" % short, lines)
-    print("maya.api.%s: %d lớp" % (short, len(classes)))
+    write("%s/%s.pyi" % (package.replace(".", "/"), short), lines)
+    print("%s.%s: %d lớp" % (package, short, len(classes)))
 
 
 def build_api():
@@ -148,7 +152,16 @@ def build_api():
             print("Bỏ qua maya.api.%s (bản Maya này không có)." % short)
 
 
+def build_api1():
+    for short in API1_MODULES:
+        try:
+            build_api_module(short, package="maya", siblings=API1_MODULES)
+        except ImportError:
+            print("Bỏ qua maya.%s (bản Maya này không có)." % short)
+
+
 build_cmds()
 build_api()
+build_api1()
 print("Đã ghi stub vào:", OUT)
 maya.standalone.uninitialize()

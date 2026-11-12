@@ -26,7 +26,8 @@ Người dùng để `"python.analysis.typeCheckingMode": "standard"`, nên stub
    PYTHONIOENCODING=utf-8 "/c/Program Files/Autodesk/Maya2023/bin/mayapy.exe" Tools/MayaStubs/gen_maya_stubs.py "C:/Users/<user>/maya-typings"
    ```
    - Bắt buộc có `PYTHONIOENCODING=utf-8`, nếu không mayapy lỗi `UnicodeEncodeError` khi in tiếng Việt.
-   - Kết quả: `maya/cmds/__init__.pyi` (khoảng 4.700 hàm, có đủ tên cờ dài và ngắn), `maya/mel/__init__.pyi`, `maya/api/__init__.pyi`, `maya/api/OpenMaya*.pyi`. Ở Maya 2023, `OpenMayaFX` không có trong `maya.api`, script tự bỏ qua.
+   - Kết quả: `maya/cmds/__init__.pyi` (khoảng 4.700 hàm, có đủ tên cờ dài và ngắn), `maya/mel/__init__.pyi`, `maya/api/__init__.pyi`, `maya/api/OpenMaya*.pyi` (API 2.0) và `maya/OpenMaya*.pyi` (API 1.0, gồm cả `OpenMayaMPx`). Ở Maya 2023, `OpenMayaFX` không có trong `maya.api`, script tự bỏ qua.
+   - Phải có stub API 1.0: Maya chỉ cài `maya/OpenMaya.pyc` và `.pyd`, Pylance không đọc được nên `extraPaths` không giúp gì, sẽ báo `Import "maya.OpenMaya" could not be resolved`.
    - Phải có `maya/api/__init__.pyi`. Thiếu file này thì Pylance vẫn dùng module thật và vẫn báo lỗi `MGlobal`.
    - Không cài gói `maya-stubs` từ PyPI: lần trước hệ thống quyền đã chặn việc tải code từ ngoài, còn stub tự sinh thì khớp đúng bản Maya đang dùng.
 

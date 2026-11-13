@@ -310,10 +310,10 @@ def _copy_library_marks(src, dst):
         for alias in _LIBRARY_ATTR_ALIASES.get(attr_name, ()):
             _remove_string_attr(dst, alias)
 
-def _freeze_curve_if_scale_uneven(curve):
-    # Chỉ chạy khi Scale X, Y, Z lệch nhau. Scale đều (kể cả khác 1) thì bỏ qua.
+def _freeze_curve_scale(curve):
+    # Chạy khi Scale khác (1, 1, 1), kể cả scale đều. Scale đã bằng 1 thì bỏ qua.
     sx, sy, sz = cmds.getAttr("{0}.scale".format(curve))[0]
-    if abs(sx - sy) < 1e-4 and abs(sy - sz) < 1e-4 and abs(sx - sz) < 1e-4:
+    if abs(sx - 1.0) < 1e-4 and abs(sy - 1.0) < 1e-4 and abs(sz - 1.0) < 1e-4:
         return
 
     # 1. Lấy danh sách các điểm CV và lưu tọa độ World Space hiện tại
@@ -854,7 +854,7 @@ class ReplaceMeshLogic(object):
             return
 
         for curve in curves:
-            _freeze_curve_if_scale_uneven(curve)
+            _freeze_curve_scale(curve)
 
         tol = cmds.floatSliderGrp(self.fld_cross_tol, query=True, value=True)
         misses = []
@@ -1147,7 +1147,7 @@ class ReplaceMeshLogic(object):
                     if cmds.objExists(old):
                         cmds.delete(old)
 
-                _freeze_curve_if_scale_uneven(curve)
+                _freeze_curve_scale(curve)
                 source_uuid = random.choice(mesh_uuids)
                 source_mesh = _resolve_uuid(source_uuid)
                 if not source_mesh:

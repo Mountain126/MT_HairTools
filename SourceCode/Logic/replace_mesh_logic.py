@@ -20,6 +20,11 @@ CURVE_UUID_ATTR = "sourceCurveUUID"
 # Duplicate copy attribute nhưng Maya cấp UUID mới, nên bản copy không khớp và không vào thư viện.
 LIBRARY_MESH_ATTR = "libraryMesh"
 WARP_LIBRARY_MESH_ATTR = "wrapLibraryMesh"
+# Góc rotation tool tự tính cho curveWarp lúc tạo mesh wrap. Khi replace lại, phần chênh giữa rotation
+# hiện tại và góc này là phần người dùng đã chỉnh tay, được cộng vào góc tính mới cho mesh thay thế.
+# Các attribute của curveWarp được kế thừa khi chọn mesh wrap cũ để replace.
+_WARP_INHERIT_ATTRS = ("rotation", "envelope", "twistRotation", "offset", "lengthScale", "samplingAccuracy",
+                       "maxScale", "flipAxis", "loopClosedCurves", "keepLength", "alignmentMode")
 _LIBRARY_NICE = {
     LIBRARY_MESH_ATTR: u"Library Mesh",
     WARP_LIBRARY_MESH_ATTR: u"Wrap Library Mesh",
@@ -167,6 +172,129 @@ def _has_export_mesh(node):
     shapes = cmds.listRelatives(node, shapes=True, type="mesh", noIntermediate=True, fullPath=True) or []
     return bool(shapes)
 
+def _build_zbrush_import_script(obj_paths):
+    """Sinh nội dung ZScript chạy một lần để nhập lần lượt các file OBJ vào ZBrush (đã thử trên ZBrush 2021).
+
+    Cách làm:
+    1. Copy subtool đang chọn. Copy không hỏi nhân cả folder như Duplicate khi folder đang đóng
+       (lúc đó ZBrush coi cả folder là mục đang chọn, và zscript không bấm được nút mở folder vì
+       nút folder đóng không tồn tại với IPress).
+    2. Chọn subtool cuối danh sách rồi Paste một lần làm subtool mẫu: Paste đặt subtool mới ngay dưới
+       subtool đang chọn, nên mẫu nằm dưới cùng. Nếu subtool cuối nằm trong folder thì đẩy mẫu ra ngoài.
+    3. Với mỗi OBJ: chọn mẫu, Duplicate (mẫu nằm ngoài folder nên không bị hỏi), bản sao nằm ngay dưới
+       mẫu; hạ SDiv về 1, Import OBJ rồi nâng SDiv lên cao nhất.
+    4. Xóa mẫu để không thừa subtool.
+
+    Duplicate đặt bản sao ngay dưới mẫu, đẩy các bản sao trước xuống dưới, nên chạy OBJ theo thứ tự
+    ngược để danh sách cuối cùng đúng thứ tự file.
+    """
+    lines = [
+        "/* ZBrush Run-Once Script - MT Replace Mesh: Copy selected SubTool & Import OBJs */",
+        "[VarDef, mtTplIdx, 0]",
+        "[VarDef, mtTplName, \"\"]",
+        "[VarDef, mtName, \"\"]",
+        "[VarDef, mtOk, 1]",
+        "[VarDef, mtIdx, 0]",
+        "[VarDef, mtCnt, 0]",
+        "[VarDef, mtPrev, 0]",
+        "[VarDef, mtPrevFld, 0]",
+        "",
+        # Tên subtool đang chọn: Tool:Item Info có dấu chấm cuối, bỏ đi (cách macro có sẵn của ZBrush 2021 làm).
+        "[RoutineDef, MT_ActiveName,",
+        "  [VarSet, mtName, [IGetTitle, Tool:Item Info]]",
+        "  [VarSet, mtName, [StrExtract, mtName, 0, [StrLength, mtName] - 2]]",
+        "]",
+        "",
+        # Đẩy subtool đang chọn xuống cuối danh sách và ra khỏi mọi folder.
+        # Shift + Move Down (mã 256 = Shift, theo StartupHotkeys.txt: Shift+1 = 49 + 256 = 305)
+        # chỉ đưa xuống cuối folder đang chứa nó; bấm tiếp mới ra khỏi folder. Ra khỏi folder
+        # có thể không làm đổi số thứ tự (folder không chiếm vị trí trong danh sách), nên phải
+        # so cả số thứ tự lẫn folder để biết lần bấm có tác dụng hay không.
+        "[RoutineDef, MT_MoveToBottom,",
+        "  [VarSet, mtCnt, [SubToolGetCount]]",
+        "  [Loop, mtCnt * 2 + 4,",
+        "    [VarSet, mtPrev, [SubToolGetActiveIndex]]",
+        "    [VarSet, mtPrevFld, [SubToolGetFolderIndex, mtPrev]]",
+        "    [If, (mtPrev >= mtCnt - 1) && (mtPrevFld < 0), [LoopExit]]",
+        "    [IKeyPress, 256, [IPress, Tool:SubTool:MoveDown]]",
+        "    [VarSet, mtIdx, [SubToolGetActiveIndex]]",
+        "    [If, (mtIdx == mtPrev) && ([SubToolGetFolderIndex, mtIdx] == mtPrevFld),",
+        # Shift không có tác dụng: thử bấm Move Down thường một bậc.
+        "      [IPress, Tool:SubTool:MoveDown]",
+        "      [VarSet, mtIdx, [SubToolGetActiveIndex]]",
+        "      [If, (mtIdx == mtPrev) && ([SubToolGetFolderIndex, mtIdx] == mtPrevFld), [LoopExit]]",
+        "    ]",
+        "  ]",
+        "]",
+        "",
+        "[RoutineDef, MT_ImportOne,",
+        "  [SubToolSelect, mtTplIdx]",
+        # Chốt an toàn: subtool ở vị trí mẫu phải đúng tên mẫu, sai thì dừng chứ không Duplicate nhầm.
+        "  [RoutineCall, MT_ActiveName]",
+        "  [If, [StrLength, mtName] != [StrLength, mtTplName],",
+        "    [VarSet, mtOk, 0]",
+        "  ]",
+        "  [If, mtOk,",
+        "    [If, [StrFind, mtTplName, mtName] != 0, [VarSet, mtOk, 0]]",
+        "  ]",
+        "  [If, mtOk,",
+        "    [IPress, Tool:SubTool:Duplicate]",
+        "    [ISet, Tool:Geometry:SDiv, 1]",
+        "    [FileNameSetNext, mtObjPath]",
+        "    [IPress, Tool:Import]",
+        "    [ISet, Tool:Geometry:SDiv, [IGetMax, Tool:Geometry:SDiv]]",
+        "  ]",
+        ", mtObjPath]",
+        "",
+        "[If, 1,",
+        "  [IShowActions, 0]",
+        # Copy 1 lần. Paste đặt subtool mới ngay dưới subtool đang chọn, nên chọn subtool cuối
+        # danh sách rồi mới Paste để mẫu nằm dưới cùng, không chen vào folder của subtool gốc.
+        "  [IPress, Tool:SubTool:Copy]",
+        "  [SubToolSelect, [SubToolGetCount] - 1]",
+        "  [IPress, Tool:SubTool:Paste]",
+        "  [SubToolSelect, [SubToolGetCount] - 1]",
+        # Subtool cuối nằm trong folder thì mẫu cũng vào folder đó: đẩy ra ngoài (không có folder thì bỏ qua).
+        "  [RoutineCall, MT_MoveToBottom]",
+        "  [VarSet, mtTplIdx, [SubToolGetActiveIndex]]",
+        "  [RoutineCall, MT_ActiveName]",
+        "  [VarSet, mtTplName, mtName]",
+        # Chốt an toàn: mẫu còn nằm trong folder đang đóng thì Duplicate sẽ nhân cả folder, nên dừng.
+        # Bit đóng (1024) nằm trên subtool đầu folder, folder index là số thứ tự của subtool đó.
+        "  [VarSet, mtIdx, [SubToolGetFolderIndex, mtTplIdx]]",
+        "  [If, mtIdx >= 0,",
+        "    [VarSet, mtCnt, [SubToolGetStatus, mtIdx]]",
+        "    [If, (INT(mtCnt / 1024) - 2 * INT(mtCnt / 2048)) == 1,",
+        # Dừng hẳn bằng Exit; không tự xóa mẫu vì Delete trong folder đóng cũng có thể xóa cả folder.
+        "      [Note, \"MT Replace Mesh: the template SubTool is inside a closed folder. Open that folder, delete the template and run the script again.\"]",
+        "      [Exit]",
+        "    ]",
+        "  ]",
+    ]
+    for obj_file in reversed(obj_paths):
+        lines.append("  [If, mtOk, [RoutineCall, MT_ImportOne, \"{0}\"]]".format(obj_file))
+    lines += [
+        # Xóa mẫu. Delete hỏi xác nhận nên giữ phím '2' khi bấm, đúng như macro có sẵn của ZBrush 2021 (Create Instance Subtool).
+        "  [SubToolSelect, mtTplIdx]",
+        "  [RoutineCall, MT_ActiveName]",
+        "  [If, mtOk,",
+        "    [If, [StrFind, mtTplName, mtName] == 0,",
+        "      [If, [StrLength, mtName] == [StrLength, mtTplName],",
+        "        [IKeyPress, '2', [IPress, Tool:SubTool:Delete]]",
+        "      ]",
+        "    ]",
+        # Báo xong rồi tự tắt sau 2 giây (tham số thứ 3 của Note là thời gian hiển thị), để người dùng
+        # biết script đã chạy hết. mtOk còn 1 nghĩa là mọi OBJ đều đã import nên số lượng biết trước từ Python.
+        "    [Note, \"MT Replace Mesh: done, imported {0} OBJ.\", , 2]".format(len(obj_paths)),
+        "  ,",
+        # Thông báo trong ZBrush để tiếng Anh không dấu: file .txt ghi bằng encoding mặc định
+        # của hệ thống nên ký tự tiếng Việt có thể làm lỗi ghi file hoặc hiện sai trong ZBrush.
+        "    [Note, [StrMerge, \"MT Replace Mesh: stopped, the template SubTool was not found: \", mtTplName]]",
+        "  ]",
+        "]",
+    ]
+    return "\n".join(lines) + "\n"
+
 def _copy_library_marks(src, dst):
     """Mesh con giữ UUID của mesh gốc trên Library Mesh / Wrap Library Mesh, không gán sourceUUID."""
     _remove_string_attr(dst, "sourceUUID")
@@ -198,6 +326,101 @@ def _freeze_curve_if_scale_uneven(curve):
     # 3. Đặt các điểm CV về lại đúng tọa độ World Space ban đầu
     for cv, pos in zip(cvs, world_positions):
         cmds.xform(cv, worldSpace=True, translation=pos)
+
+GS_GENERATOR_TYPE = "GSCT_CurveMeshGeneratorNode"
+# Attribute của node GS không chép sang node đo (thuộc tính hệ thống, hoặc profile phải để 0 cho card phẳng).
+_GS_PROBE_SKIP = ("caching", "frozen", "isHistoricallyInteresting", "nodeState", "profile")
+
+
+def _gs_generator(curve_shape):
+    """Node GSCT_CurveMeshGeneratorNode của GS CurveTools dựng card từ curve này (không có thì trả về None)."""
+    for n in cmds.listConnections(curve_shape, source=False, destination=True) or []:
+        if cmds.nodeType(n) == GS_GENERATOR_TYPE:
+            return n
+    return None
+
+
+def _signed_angle_around(a, b, axis):
+    """Góc có dấu (độ) quay từ a sang b quanh trục axis, sau khi chiếu cả hai lên mặt phẳng vuông góc axis."""
+    a = a - axis * (a * axis)
+    b = b - axis * (b * axis)
+    if a.length() < 1e-8 or b.length() < 1e-8:
+        return None
+    a.normalize()
+    b.normalize()
+    return math.degrees(math.atan2((a ^ b) * axis, a * b))
+
+
+class _GsOrientProbe(object):
+    """Đo góc cần gán cho curveWarp.rotation để card khớp với card GS CurveTools.
+
+    GS và curveWarp (chế độ Auto Normals) chọn khung xoay ban đầu khác nhau. Với curve có gốc nằm ngang
+    thì hai khung trùng nhau, nhưng với curve có gốc gần song song trục up, khung curveWarp lệch ±90 độ
+    và dấu thay đổi theo sai khác rất nhỏ của curve. Vì vậy không quy đổi bằng công thức cố định được.
+
+    Cách đo: một node GS tạm chép thông số của node GS thật (profile = 0 để card phẳng) và một plane
+    curveWarp tạm (rotation = 0), cùng nối vào curve. Góc giữa pháp tuyến hai card ở gốc curve chính là
+    góc rotation để plane trùng với card GS (đã gồm Orientation, Initial Tangent Axis, Flip Frame).
+    Hai node tạm được tạo một lần và dùng lại cho mọi curve, gọi cleanup() để xóa.
+    """
+
+    def __init__(self):
+        self.gs_node = None
+        self.plane = None
+        self.warp = None
+
+    def _ensure(self):
+        if self.gs_node and cmds.objExists(self.gs_node) and self.plane and cmds.objExists(self.plane):
+            return
+        self.cleanup()
+        self.gs_node = cmds.createNode(GS_GENERATOR_TYPE, name="MT_gsOrientProbe#", skipSelect=True)
+        # Plane dài theo X, pháp tuyến +Y: curveWarp Auto chọn trục X (dài nhất) làm chiều dọc curve.
+        self.plane = cmds.polyPlane(name="MT_warpOrientProbe#", width=1.0, height=0.1,
+                                    subdivisionsX=4, subdivisionsY=1, constructionHistory=False)[0]
+        self.warp = cmds.deformer(self.plane, type="curveWarp")[0]
+        cmds.setAttr("{0}.keepLength".format(self.warp), 1)
+
+    def cleanup(self):
+        for n in (self.gs_node, self.plane):
+            if n and cmds.objExists(n):
+                try:
+                    cmds.delete(n)
+                except Exception:
+                    pass
+        self.gs_node = self.plane = self.warp = None
+
+    def measure(self, curve_shape, generator):
+        """Trả về góc (độ) cho curveWarp.rotation với mesh nằm dài theo X, pháp tuyến +Y; lỗi thì trả về None."""
+        self._ensure()
+        for attr in cmds.listAttr(generator, scalar=True, settable=True) or []:
+            if attr in _GS_PROBE_SKIP:
+                continue
+            try:
+                cmds.setAttr("{0}.{1}".format(self.gs_node, attr), cmds.getAttr("{0}.{1}".format(generator, attr)))
+            except Exception:
+                pass
+        cmds.setAttr("{0}.profile".format(self.gs_node), 0)
+        cmds.connectAttr("{0}.worldSpace[0]".format(curve_shape), "{0}.inputCurve".format(self.gs_node), force=True)
+        cmds.connectAttr("{0}.worldSpace[0]".format(curve_shape), "{0}.inputCurve".format(self.warp), force=True)
+
+        sel = om2.MSelectionList()
+        sel.add(curve_shape)
+        sel.add("{0}.outputMesh".format(self.gs_node))
+        sel.add(self.plane)
+        fc = om2.MFnNurbsCurve(sel.getDagPath(0))
+        gs_mesh = om2.MFnMesh(sel.getPlug(1).asMObject())
+        plane_dag = sel.getDagPath(2)
+        plane_dag.extendToShape()
+        plane_mesh = om2.MFnMesh(plane_dag)
+
+        # Đo sát gốc curve (card GS dựng từ gốc, curveWarp đặt mesh từ gốc).
+        u = fc.findParamFromLength(fc.length() * 0.001)
+        p = fc.getPointAtParam(u, om2.MSpace.kWorld)
+        t = fc.tangent(u, om2.MSpace.kWorld).normal()
+        n_gs = om2.MVector(gs_mesh.getClosestNormal(p, om2.MSpace.kObject)[0])
+        n_warp = om2.MVector(plane_mesh.getClosestNormal(p, om2.MSpace.kWorld)[0])
+        return _signed_angle_around(n_warp, n_gs, t)
+
 
 def _safe_dir_name(name):
     return "".join("_" if ch in '<>:"/\\|?*' else ch for ch in name).strip() or "_"
@@ -668,19 +891,49 @@ class ReplaceMeshLogic(object):
 
     def apply_warp(self):
         selection = cmds.ls(selection=True, long=True)
+        # Mỗi curve là một việc: (curve, mesh wrap cũ). Mesh cũ = None nghĩa là luồng chọn curve
+        # (tính góc xoay từ curve); có mesh cũ nghĩa là luồng chọn mesh (chép thông số mesh cũ).
         curves = []
-        
+        old_mesh_by_curve = {}
+        missing_curve = []
+
         for obj in selection:
+            # Chọn shape trong Outliner thì quy về transform cha.
+            if cmds.objectType(obj, isAType="shape"):
+                parents = cmds.listRelatives(obj, parent=True, fullPath=True)
+                if not parents:
+                    continue
+                obj = parents[0]
             shapes = cmds.listRelatives(obj, shapes=True, fullPath=True)
             if not shapes: continue
-            if cmds.objectType(shapes[0]) in ["nurbsCurve", "bezierCurve"]: curves.append(obj)
+            if cmds.objectType(shapes[0]) in ["nurbsCurve", "bezierCurve"]:
+                if obj not in curves:
+                    curves.append(obj)
+                continue
+            # Mesh đã wrap trước đó: tìm ngược lại curve gốc theo UUID lưu trong sourceCurveUUID,
+            # để chọn theo tên trong Outliner thay vì phải tìm curve trong scene.
+            if cmds.attributeQuery(CURVE_UUID_ATTR, node=obj, exists=True):
+                curve_uuid = cmds.getAttr("{0}.{1}".format(obj, CURVE_UUID_ATTR))
+                curve = _resolve_uuid(curve_uuid)
+                if curve:
+                    if curve not in curves:
+                        curves.append(curve)
+                    # Chọn cả curve lẫn mesh của nó thì ưu tiên luồng mesh để giữ thông số đã chỉnh.
+                    old_mesh_by_curve.setdefault(curve, obj)
+                else:
+                    missing_curve.append(obj.split("|")[-1])
+        jobs = [(c, old_mesh_by_curve.get(c)) for c in curves]
+
+        if missing_curve:
+            cmds.warning(u"Không tìm thấy curve gốc (theo {0}) của {1} mesh: {2}".format(
+                CURVE_UUID_ATTR, len(missing_curve), ", ".join(missing_curve)))
 
         mesh_uuids = list(self.warp_source_memory)
         if not mesh_uuids:
             cmds.warning(u"Danh sách Curve Mesh đang trống. Vui lòng chọn Mesh và ấn Select And Save Curve Mesh trước.")
             return
         if not curves:
-            cmds.warning(u"Vui lòng chọn ÍT NHẤT 1 Curve.")
+            cmds.warning(u"Vui lòng chọn ÍT NHẤT 1 Curve hoặc 1 mesh đã wrap (có attribute {0}).".format(CURVE_UUID_ATTR))
             return
 
         # Tăng tốc khi xử lý nhiều curve: tạm dừng vẽ lại viewport và chặn sync_ui
@@ -695,7 +948,7 @@ class ReplaceMeshLogic(object):
                 refresh_suspended = True
             except Exception:
                 pass
-            last_created_mesh, success_count, no_orient = self._apply_warp_curves(curves, mesh_uuids)
+            last_created_mesh, success_count, no_orient = self._apply_warp_curves(jobs, mesh_uuids)
         finally:
             if refresh_suspended:
                 cmds.refresh(suspend=False)
@@ -709,7 +962,118 @@ class ReplaceMeshLogic(object):
             self.sync_ui()
             om.MGlobal.displayInfo(u"Thành công! Đã tạo Curve Warp cho {0} đường curve.".format(success_count))
 
-    def _apply_warp_curves(self, curves, mesh_uuids):
+    def _capture_wrap_tweaks(self, old_mesh):
+        """Đọc các thông số người dùng đã tinh chỉnh trên mesh wrap cũ để mesh thay thế kế thừa lại.
+        Trả về None nếu mesh không có curveWarp (không phải mesh wrap)."""
+        warps = cmds.ls(cmds.listHistory(old_mesh) or [], type="curveWarp")
+        if not warps:
+            return None
+        warp = warps[0]
+        data = {"warp": {}, "ramps": {}}
+
+        # Gồm cả rotation: luồng chọn mesh lấy nguyên góc xoay của mesh cũ, không tính lại từ curve.
+        for attr in _WARP_INHERIT_ATTRS:
+            try:
+                data["warp"][attr] = cmds.getAttr("{0}.{1}".format(warp, attr))
+            except Exception:
+                pass
+
+        # Ramp Scale Curve / Twist Curve: lưu từng điểm (position, value).
+        for ramp in ("scaleCurve", "twistCurve"):
+            points = []
+            for idx in cmds.getAttr("{0}.{1}".format(warp, ramp), multiIndices=True) or []:
+                try:
+                    pos, val = cmds.getAttr("{0}.{1}[{2}]".format(warp, ramp, idx))[0]
+                except Exception:
+                    continue
+                points.append((pos, val))
+            if points:
+                data["ramps"][ramp] = points
+
+        # Slider Trái/Phải, Lên/Xuống, Độ dày: lưu theo trục cắt ngang (crossAxis1/2) chứ không theo tx/ty/tz,
+        # vì mesh mới có thể nằm dài theo trục khác nên crossAxis khác mesh cũ.
+        pmv_scale, pmv_trans = self.get_pmv_nodes(old_mesh)
+        t_ax1, t_ax2, s_ax1, s_ax2 = self.get_cross_axes(old_mesh)
+        cross_trans = cross_scale = None
+        if pmv_trans:
+            try:
+                cross_trans = (cmds.getAttr("{0}.{1}".format(pmv_trans, t_ax1)),
+                               cmds.getAttr("{0}.{1}".format(pmv_trans, t_ax2)))
+            except Exception:
+                pass
+        if pmv_scale:
+            try:
+                cross_scale = (cmds.getAttr("{0}.{1}".format(pmv_scale, s_ax1)),
+                               cmds.getAttr("{0}.{1}".format(pmv_scale, s_ax2)))
+            except Exception:
+                pass
+
+        # Transform của mesh (trường hợp người dùng dịch/xoay/scale trực tiếp mesh sau khi wrap).
+        xf = {}
+        for attr in ("translate", "rotate", "scale"):
+            try:
+                xf[attr] = cmds.getAttr("{0}.{1}".format(old_mesh, attr))[0]
+            except Exception:
+                pass
+        return {"warp": data["warp"], "ramps": data["ramps"], "cross_trans": cross_trans,
+                "cross_scale": cross_scale, "transform": xf}
+
+    def _apply_wrap_tweaks(self, mesh, warp_node, pmv_scale, pmv_trans, data):
+        """Gán lại các thông số đã lưu bằng _capture_wrap_tweaks cho mesh wrap mới."""
+        for attr, val in data["warp"].items():
+            try:
+                cmds.setAttr("{0}.{1}".format(warp_node, attr), val)
+            except Exception:
+                pass
+
+        for ramp, points in data["ramps"].items():
+            # Xóa các điểm mặc định rồi ghi lại đúng các điểm của mesh cũ.
+            for idx in cmds.getAttr("{0}.{1}".format(warp_node, ramp), multiIndices=True) or []:
+                try:
+                    cmds.removeMultiInstance("{0}.{1}[{2}]".format(warp_node, ramp, idx), b=True)
+                except Exception:
+                    pass
+            for i, (pos, val) in enumerate(points):
+                try:
+                    cmds.setAttr("{0}.{1}[{2}]".format(warp_node, ramp, i), pos, val, type="double2")
+                except Exception:
+                    try:
+                        cmds.setAttr("{0}.{1}[{2}].{1}_Position".format(warp_node, ramp, i), pos)
+                        cmds.setAttr("{0}.{1}[{2}].{1}_Value".format(warp_node, ramp, i), val)
+                    except Exception:
+                        pass
+
+        t_ax1, t_ax2, s_ax1, s_ax2 = self.get_cross_axes(mesh)
+        if data["cross_trans"]:
+            for ax, val in zip((t_ax1, t_ax2), data["cross_trans"]):
+                try:
+                    cmds.setAttr("{0}.{1}".format(pmv_trans, ax), val)
+                except Exception:
+                    pass
+        if data["cross_scale"]:
+            for ax, val in zip((s_ax1, s_ax2), data["cross_scale"]):
+                try:
+                    cmds.setAttr("{0}.{1}".format(pmv_scale, ax), val)
+                except Exception:
+                    pass
+
+        for attr, val in data["transform"].items():
+            try:
+                cmds.setAttr("{0}.{1}".format(mesh, attr), val[0], val[1], val[2], type="double3")
+            except Exception:
+                pass
+
+    def _apply_warp_curves(self, jobs, mesh_uuids):
+        """jobs: danh sách (curve, mesh wrap cũ hoặc None), xem apply_warp."""
+        # Node đo góc GS dùng chung cho mọi curve, luôn xóa khi xong (kể cả khi lỗi).
+        # Node chỉ được tạo khi đo lần đầu, nên luồng chọn mesh không tốn công tạo node đo.
+        probe = _GsOrientProbe()
+        try:
+            return self._apply_warp_curves_impl(jobs, mesh_uuids, probe)
+        finally:
+            probe.cleanup()
+
+    def _apply_warp_curves_impl(self, jobs, mesh_uuids, probe):
         last_created_mesh = None
         success_count = 0
         no_orient = 0
@@ -727,18 +1091,28 @@ class ReplaceMeshLogic(object):
             if value:
                 meshes_by_curve_uuid.setdefault(value, []).append(obj)
 
-        for curve in curves:
+        for curve, picked_mesh in jobs:
             try:
                 curve_shapes = cmds.listRelatives(curve, shapes=True, fullPath=True)
                 if not curve_shapes: continue
                 curve_shape = curve_shapes[0]
 
-                # --- KIỂM TRA VÀ LẤY THÔNG SỐ ORIENTATION LINH HOẠT ---
-                custom_orient = self._find_curve_orientation(curve, curve_shape, verbose=False)
-                if custom_orient is None:
-                    no_orient += 1
-                    custom_orient = 0.0
-                # -------------------------------------------------------------
+                # Luồng chọn mesh: lấy thông số của mesh cũ, bỏ qua bước tìm Orientation và đo góc từ curve.
+                # Mesh cũ không còn curveWarp (vd đã xóa history) thì quay về luồng chọn curve.
+                tweaks = None
+                if picked_mesh and cmds.objExists(picked_mesh):
+                    try:
+                        tweaks = self._capture_wrap_tweaks(picked_mesh)
+                    except Exception as exc:
+                        cmds.warning(u"Không đọc được thông số của mesh cũ '{0}': {1}".format(picked_mesh, exc))
+
+                custom_orient = 0.0
+                if not tweaks:
+                    # --- KIỂM TRA VÀ LẤY THÔNG SỐ ORIENTATION LINH HOẠT ---
+                    custom_orient = self._find_curve_orientation(curve, curve_shape, verbose=False)
+                    if custom_orient is None:
+                        no_orient += 1
+                        custom_orient = 0.0
 
                 curve_uuid = _get_uuid(curve)
 
@@ -837,10 +1211,27 @@ class ReplaceMeshLogic(object):
                 cmds.connectAttr("{0}.worldSpace[0]".format(curve_shape), "{0}.inputCurve".format(warp_node), force=True)
                 cmds.setAttr("{0}.keepLength".format(warp_node), 1)
                 
-                # --- ÁP DỤNG GIÁ TRỊ ORIENT LẤY ĐƯỢC VÀO THUỘC TÍNH ROTATION CỦA WARP NODE ---
-                if custom_orient != 0.0:
-                    # Z-up: bù -90 độ; Y-up: đảo hướng 180 - orient
-                    cmds.setAttr("{0}.rotation".format(warp_node), custom_orient - 90.0 if z_up else custom_orient)
+                if tweaks:
+                    # Luồng chọn mesh: chép toàn bộ thông số mesh cũ (gồm cả góc xoay).
+                    self._apply_wrap_tweaks(dup_mesh, warp_node, pmv_scale, pmv_trans, tweaks)
+                else:
+                    # --- LUỒNG CHỌN CURVE: ÁP DỤNG GÓC XOAY TÍNH TỪ CURVE CHO WARP NODE ---
+                    # Mesh thư viện ở Z-up nằm lệch 90 độ so với plane đo (dài X, pháp tuyến +Y), nên bù -90 độ.
+                    base_offset = -90.0 if z_up else 0.0
+                    rotation = None
+                    generator = _gs_generator(curve_shape)
+                    if generator:
+                        try:
+                            measured = probe.measure(curve_shape, generator)
+                        except Exception:
+                            measured = None
+                        if measured is not None:
+                            rotation = measured + base_offset
+                    if rotation is None and custom_orient != 0.0:
+                        # Curve không do GS dựng (hoặc đo lỗi): dùng thẳng giá trị Orientation như trước.
+                        rotation = custom_orient + base_offset
+                    if rotation is not None:
+                        cmds.setAttr("{0}.rotation".format(warp_node), rotation)
 
                 success_count += 1
 
@@ -979,17 +1370,7 @@ class ReplaceMeshLogic(object):
 
             zscript_path = os.path.join(export_dir, "ZBrush_AutoImport_{0}.txt".format(folder)).replace("\\", "/")
             with open(zscript_path, "w") as f:
-                f.write('/* ZBrush Run-Once Script - Auto Duplicate & Import OBJs */\n')
-                f.write('[If, 1,\n')
-                f.write('  [IShowActions, 0]\n')
-                for obj_file in obj_paths:
-                    f.write('  [IPress, Tool:SubTool:Duplicate]\n')
-                    f.write('  [IPress, Tool:SubTool:SelectDown]\n')
-                    f.write('  [ISet, Tool:Geometry:SDiv, 1]\n')
-                    f.write('  [FileNameSetNext, "{0}"]\n'.format(obj_file))
-                    f.write('  [IPress, Tool:Import]\n')
-                    f.write('  [ISet, Tool:Geometry:SDiv, 100]\n')
-                f.write(']\n')
+                f.write(_build_zbrush_import_script(obj_paths))
 
         cmds.select(clear=True)
         om.MGlobal.displayInfo(u"Đã xuất {0} OBJ vào {1} thư mục và tạo ZScript tại: {2}".format(total, len(order), root_dir))

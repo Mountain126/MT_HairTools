@@ -63,8 +63,6 @@ class MT_ReplaceMesh(logic.ReplaceMeshLogic):
         self.btn_mirror_y = cmds.button(label="Y", h=btn_H, bgc=color01(128, 128, 128), command=lambda *args: self.toggle_mirror_axis("y"))
         self.btn_mirror_z = cmds.button(label="Z", h=btn_H, bgc=color01(128, 128, 128), command=lambda *args: self.toggle_mirror_axis("z"))
         cmds.setParent('..')
-        cmds.setParent('..')
-        cmds.setParent('..')
 
         cmds.separator(h=2, style='in')
         cmds.text(label=u"Quét tất cả các đối tượng Place Holder muốn thay thế.\nSau đó ấn Replace Mesh From Library To Placeholder.", align="left", font="boldLabelFont")  
@@ -74,6 +72,8 @@ class MT_ReplaceMesh(logic.ReplaceMeshLogic):
         
         cmds.button(label="Replace Mesh From Library To Placeholder", bgc=color01(238, 137, 38), h=btn_H, command=lambda *args: self.apply_snap())
         cmds.text(label=u"LƯU Ý:\nNút này được thiết kế để có thể thay thế 1 cách ngẫu nhiên từ tập hợp\nnhững Mesh được chọn vào vị trí của Place Holder.\nTrong trường hợp muốn thay thế chính xác Mesh mong muốn, bạn có thể\nlựa chọn 1 Mesh và ấn Select And Save Library Mesh.\nSau đó chọn các Place Holder để thay thế chính xác bằng Mesh đó.", align="left", font="obliqueLabelFont")
+        cmds.setParent('..')
+        cmds.setParent('..')
 
         # ==========================================
         # PHẦN 2: REPLACE MESH TO CURVES & TINH CHỈNH
